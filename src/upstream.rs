@@ -49,6 +49,17 @@ struct GithubTagCommit {
 #[derive(Debug, Deserialize)]
 struct GithubCommit {
     sha: String,
+    commit: GithubCommitDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubCommitDetail {
+    author: GithubCommitAuthor,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubCommitAuthor {
+    date: String,  // ISO 8601: "2024-01-15T10:30:00Z"
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,10 +407,20 @@ impl UpstreamChecker {
             let is_outdated = !latest.sha.starts_with(current_commit)
                 && !current_commit.starts_with(&latest.sha[..]);
 
+            // Format commit date as YYYY-MM-DD (strip time part of ISO 8601)
+            let commit_date = latest.commit.author.date
+                .split('T')
+                .next()
+                .unwrap_or(&latest.commit.author.date)
+                .to_string();
+
+            // latest_version: "YYYY-MM-DD (短hash)"  mirrors current_version: "PKG_VERSION (短hash)"
+            let latest_display = format!("{} ({})", commit_date, latest_short);
+
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: format!("{} ({})", parsed.pkg_version, current_short),
-                latest_version: Some(latest_short.to_string()),
+                latest_version: Some(latest_display),
                 latest_tag: None,
                 latest_commit: Some(latest.sha.clone()),
                 latest_hash_sha256: None,
