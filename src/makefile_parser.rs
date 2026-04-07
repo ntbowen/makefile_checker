@@ -183,7 +183,13 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
         .find_map(|token| {
             if let Some(rest) = token.strip_prefix("@SF/") {
                 // @SF/projectname[/path] → SourceForge
-                let project = rest.split('/').next().unwrap_or(rest);
+                // Some use @SF/project/<name>/ (with literal 'project' as first segment)
+                let segments: Vec<&str> = rest.splitn(3, '/').collect();
+                let project = if segments.first().copied() == Some("project") {
+                    segments.get(1).copied().unwrap_or(rest)
+                } else {
+                    segments.first().copied().unwrap_or(rest)
+                };
                 let project = expand_vars(project, &vars);
                 if !project.is_empty() && !project.contains("$(") {
                     return Some(SourceType::SourceForge { project });
@@ -198,7 +204,7 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
         expanded_source_url
             .split_whitespace()
             .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
-            .map(|u| u.to_string())
+            .map(|u| u.trim_end_matches('?').to_string())
             .collect()
     };
     let source_url = source_urls.first().cloned();
@@ -859,6 +865,13 @@ fn detect_source_type(
         return SourceType::BitBucket { owner, repo, tag_template };
     }
 
+    // BitBucket downloads directory: bitbucket.org/<owner>/<repo>/downloads/
+    if let Some(caps) = RE_BITBUCKET_DOWNLOADS.captures(url) {
+        let owner = caps[1].to_string();
+        let repo = caps[2].to_string();
+        return SourceType::BitBucket { owner, repo, tag_template: TagTemplate::WithV };
+    }
+
     // Gitea / Forgejo: <host>/<owner>/<repo>/archive/<ref>.tar.gz
     // Exclude known platforms already handled above
     if let Some(caps) = RE_GITEA.captures(url) {
@@ -972,7 +985,8 @@ static RE_VAR_ASSIGN: LazyLock<Regex> = LazyLock::new(|| {
 
 
 static RE_CODELOAD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https://codeload\.github\.com/([^/]+)/([^/]+)/tar\.gz/(.+)").unwrap()
+    // Matches tar.gz and zip downloads: /tar.gz/<ref> or /zip/<ref>
+    Regex::new(r"https://codeload\.github\.com/([^/]+)/([^/]+)/(?:tar\.gz|zip)/([^?]+)").unwrap()
 });
 
 static RE_GITHUB_ARCHIVE: LazyLock<Regex> = LazyLock::new(|| {
@@ -999,6 +1013,11 @@ static RE_GITLAB: LazyLock<Regex> = LazyLock::new(|| {
 
 static RE_BITBUCKET: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https://bitbucket\.org/([^/]+)/([^/]+)/get/([^/]+)\.tar").unwrap()
+});
+
+// BitBucket downloads directory (no specific file/ref in URL)
+static RE_BITBUCKET_DOWNLOADS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https://bitbucket\.org/([^/]+)/([^/]+)/downloads/?$").unwrap()
 });
 
 static RE_GITEA: LazyLock<Regex> = LazyLock::new(|| {
@@ -1713,6 +1732,39 @@ mod tests {
         let st = parse_fake(&[("PKG_SOURCE_URL", "@SF/emailrelay/1.9.2")]);
         assert!(matches!(st, SourceType::SourceForge { project } if project == "emailrelay"),
             "@SF/<project>/<subpath> should use first segment as project");
+    }
+
+    #[test]
+    fn test_at_sf_project_prefix() {
+        // libsoxr: PKG_SOURCE_URL:=@SF/project/soxr/
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@SF/project/soxr/")]);
+        assert!(matches!(st, SourceType::SourceForge { project } if project == "soxr"),
+            "@SF/project/<name> should skip 'project' and use second segment");
+    }
+
+    #[test]
+    fn test_codeload_zip_url() {
+        // nlohmannjson: codeload.github.com/.../zip/v1.0.0?
+        let st = detect_source_type(
+            "https://codeload.github.com/nlohmann/json/zip/v1.0.0",
+            "1.0.0", "nlohmannjson", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GitHubRelease { owner, repo, tag_template }
+            if owner == "nlohmann" && repo == "json"
+            && matches!(tag_template, TagTemplate::WithV)),
+            "codeload zip URL should be detected as GitHubRelease");
+    }
+
+    #[test]
+    fn test_bitbucket_downloads_dir() {
+        // lua-bencode: bitbucket.org/wilhelmy/lua-bencode/downloads/
+        let st = detect_source_type(
+            "https://bitbucket.org/wilhelmy/lua-bencode/downloads/",
+            "2.2.0", "lua-bencode", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::BitBucket { owner, repo, .. }
+            if owner == "wilhelmy" && repo == "lua-bencode"),
+            "bitbucket.org/.../downloads/ should be detected as BitBucket");
     }
 
     #[test]
