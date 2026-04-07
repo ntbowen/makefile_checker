@@ -1268,6 +1268,29 @@ mod tests {
         let ver = expand_vars(vars.get("PKG_VERSION").unwrap(), &vars);
         assert_eq!(ver, "6.11.0");
     }
+
+    #[test]
+    fn test_modclean_version() {
+        // node-modclean: PKG_REALVERSION = 3.0.0-beta.1
+        // PKG_VERSION = $(subst -beta.,_beta,$(PKG_REALVERSION)) -> 3.0.0_beta1
+        let mut vars = HashMap::new();
+        vars.insert("PKG_NPM_NAME".to_string(), "modclean".to_string());
+        vars.insert("PKG_NAME".to_string(), "node-$(PKG_NPM_NAME)".to_string());
+        vars.insert("PKG_REALVERSION".to_string(), "3.0.0-beta.1".to_string());
+        vars.insert("PKG_VERSION".to_string(),
+            "$(subst -beta.,_beta,$(PKG_REALVERSION))".to_string());
+        vars.insert("PKG_SOURCE".to_string(),
+            "$(PKG_NPM_NAME)-$(PKG_REALVERSION).tgz".to_string());
+
+        let name = expand_vars(vars.get("PKG_NAME").unwrap(), &vars);
+        let ver  = expand_vars(vars.get("PKG_VERSION").unwrap(), &vars);
+        let src  = expand_vars(vars.get("PKG_SOURCE").unwrap(), &vars);
+
+        assert_eq!(name, "node-modclean");
+        assert_eq!(ver,  "3.0.0_beta1");
+        assert_eq!(src,  "modclean-3.0.0-beta.1.tgz");
+    }
+
 }
 
 pub fn find_makefiles(search_paths: &[String], skip_patterns: &[String]) -> Vec<PathBuf> {
