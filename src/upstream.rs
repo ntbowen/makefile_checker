@@ -407,19 +407,29 @@ impl UpstreamChecker {
             let is_outdated = !latest.sha.starts_with(current_commit)
                 && !current_commit.starts_with(&latest.sha[..]);
 
-            // Format commit date as YYYY-MM-DD (strip time part of ISO 8601)
+            // Format latest commit date as YYYY-MM-DD (strip time part of ISO 8601)
             let commit_date = latest.commit.author.date
                 .split('T')
                 .next()
                 .unwrap_or(&latest.commit.author.date)
                 .to_string();
 
-            // latest_version: "YYYY-MM-DD (短hash)"  mirrors current_version: "PKG_VERSION (短hash)"
+            // latest_version: "YYYY-MM-DD (短hash)"
             let latest_display = format!("{} ({})", commit_date, latest_short);
+
+            // current_version: prefer PKG_SOURCE_DATE for date-aligned display so both
+            // columns share the same "YYYY-MM-DD (hash)" format and are directly comparable.
+            // Normalize dot-separated dates (2019.02.11) to dashes (2019-02-11).
+            let current_display = if let Some(date) = &parsed.pkg_source_date {
+                let normalized = date.replace('.', "-");
+                format!("{} ({})", normalized, current_short)
+            } else {
+                format!("{} ({})", parsed.pkg_version, current_short)
+            };
 
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: format!("{} ({})", parsed.pkg_version, current_short),
+                current_version: current_display,
                 latest_version: Some(latest_display),
                 latest_tag: None,
                 latest_commit: Some(latest.sha.clone()),
