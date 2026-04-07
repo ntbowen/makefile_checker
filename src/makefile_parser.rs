@@ -216,9 +216,16 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
 /// Supports up to 10 recursive passes; unknown $(shell ...) expressions are
 /// left unexpanded (returned as-is) rather than causing a panic.
 pub(crate) fn expand_vars(input: &str, vars: &HashMap<String, String>) -> String {
+    expand_vars_depth(input, vars, 0)
+}
+
+fn expand_vars_depth(input: &str, vars: &HashMap<String, String>, depth: usize) -> String {
+    if depth > 32 {
+        return input.to_string();
+    }
     let mut result = input.to_string();
     for _ in 0..10 {
-        let expanded = expand_once(&result, vars);
+        let expanded = expand_once_depth(&result, vars, depth);
         if expanded == result {
             break;
         }
@@ -232,7 +239,7 @@ pub(crate) fn expand_vars(input: &str, vars: &HashMap<String, String>) -> String
 }
 
 /// One pass: find the innermost $(...) / ${...}, evaluate it, replace in string.
-fn expand_once(input: &str, vars: &HashMap<String, String>) -> String {
+fn expand_once_depth(input: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len());
     let mut i = 0;
@@ -241,18 +248,18 @@ fn expand_once(input: &str, vars: &HashMap<String, String>) -> String {
             let open = bytes[i + 1];
             if open == b'(' || open == b'{' {
                 let close = if open == b'(' { b')' } else { b'}' };
-                // Find matching close bracket (depth-aware)
+                // Find matching close bracket (bracket_depth-aware)
                 let start = i + 2;
-                let mut depth = 1usize;
+                let mut bracket_depth = 1usize;
                 let mut j = start;
-                while j < bytes.len() && depth > 0 {
-                    if bytes[j] == open  { depth += 1; }
-                    if bytes[j] == close { depth -= 1; }
-                    if depth > 0 { j += 1; }
+                while j < bytes.len() && bracket_depth > 0 {
+                    if bytes[j] == open  { bracket_depth += 1; }
+                    if bytes[j] == close { bracket_depth -= 1; }
+                    if bracket_depth > 0 { j += 1; }
                 }
-                if depth == 0 {
+                if bracket_depth == 0 {
                     let inner = &input[start..j];
-                    let replacement = eval_make_expr(inner, vars);
+                    let replacement = eval_make_expr_depth(inner, vars, depth + 1);
                     out.push_str(&replacement);
                     i = j + 1;
                     continue;
@@ -271,7 +278,7 @@ fn expand_once(input: &str, vars: &HashMap<String, String>) -> String {
 }
 
 /// Evaluate the content of $(…): either a function call or a variable name.
-fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
+fn eval_make_expr_depth(inner: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let inner = inner.trim();
 
     // Detect function call: starts with a known function name followed by space/tab
@@ -280,38 +287,38 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
         let func = inner[..sp].trim();
         let rest = inner[sp..].trim();
         match func {
-            "subst" => return make_subst(rest, vars),
-            "patsubst" => return make_patsubst(rest, vars),
+            "subst" => return make_subst(rest, vars, depth),
+            "patsubst" => return make_patsubst(rest, vars, depth),
             "strip" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace().collect::<Vec<_>>().join(" ");
             }
-            "findstring" => return make_findstring(rest, vars),
-            "filter" => return make_filter(rest, vars, false),
-            "filter-out" => return make_filter(rest, vars, true),
+            "findstring" => return make_findstring(rest, vars, depth),
+            "filter" => return make_filter(rest, vars, false, depth),
+            "filter-out" => return make_filter(rest, vars, true, depth),
             "sort" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 let mut words: Vec<&str> = t.split_whitespace().collect();
                 words.sort_unstable();
                 words.dedup();
                 return words.join(" ");
             }
-            "word" => return make_word(rest, vars),
+            "word" => return make_word(rest, vars, depth),
             "words" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace().count().to_string();
             }
-            "wordlist" => return make_wordlist(rest, vars),
+            "wordlist" => return make_wordlist(rest, vars, depth),
             "firstword" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace().next().unwrap_or("").to_string();
             }
             "lastword" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace().last().unwrap_or("").to_string();
             }
             "dir" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace()
                     .map(|w| match w.rfind('/') {
                         Some(p) => w[..=p].to_string(),
@@ -320,7 +327,7 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
                     .collect::<Vec<_>>().join(" ");
             }
             "notdir" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace()
                     .map(|w| match w.rfind('/') {
                         Some(p) => &w[p+1..],
@@ -329,13 +336,13 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
                     .collect::<Vec<_>>().join(" ");
             }
             "suffix" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace()
                     .filter_map(|w| w.rfind('.').map(|p| &w[p..]))
                     .collect::<Vec<_>>().join(" ");
             }
             "basename" => {
-                let t = expand_vars(rest, vars);
+                let t = expand_vars_depth(rest, vars, depth);
                 return t.split_whitespace()
                     .map(|w| match w.rfind('.') {
                         Some(p) => &w[..p],
@@ -343,12 +350,12 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
                     })
                     .collect::<Vec<_>>().join(" ");
             }
-            "addsuffix" => return make_addsuffix(rest, vars),
-            "addprefix" => return make_addprefix(rest, vars),
-            "join" => return make_join(rest, vars),
-            "if" => return make_if(rest, vars),
-            "or" => return make_or(rest, vars),
-            "and" => return make_and(rest, vars),
+            "addsuffix" => return make_addsuffix(rest, vars, depth),
+            "addprefix" => return make_addprefix(rest, vars, depth),
+            "join" => return make_join(rest, vars, depth),
+            "if" => return make_if(rest, vars, depth),
+            "or" => return make_or(rest, vars, depth),
+            "and" => return make_and(rest, vars, depth),
             "shell" => {
                 // Do not execute — return empty string as safe fallback
                 return String::new();
@@ -356,14 +363,14 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
             "call" => {
                 // Basic $(call var,arg1,arg2) — expand the variable only
                 let parts: Vec<&str> = rest.splitn(2, ',').collect();
-                let fname = expand_vars(parts[0].trim(), vars);
+                let fname = expand_vars_depth(parts[0].trim(), vars, depth);
                 if let Some(v) = vars.get(fname.trim()) {
-                    return expand_vars(v, vars);
+                    return expand_vars_depth(v, vars, depth);
                 }
                 return String::new();
             }
             "value" => {
-                let vname = expand_vars(rest, vars);
+                let vname = expand_vars_depth(rest, vars, depth);
                 return vars.get(vname.trim()).cloned().unwrap_or_default();
             }
             "origin" | "flavor" | "info" | "warning" | "error" => {
@@ -385,7 +392,7 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
             let pat = &subst_spec[..eq];
             let rep = &subst_spec[eq+1..];
             if let Some(val) = vars.get(varname.trim()) {
-                let expanded = expand_vars(val, vars);
+                let expanded = expand_vars_depth(val, vars, depth);
                 return expanded.split_whitespace()
                     .map(|w| if w.ends_with(pat) {
                         format!("{}{}", &w[..w.len()-pat.len()], rep)
@@ -399,7 +406,7 @@ fn eval_make_expr(inner: &str, vars: &HashMap<String, String>) -> String {
 
     // Plain variable lookup
     vars.get(inner)
-        .map(|v| expand_vars(v, vars))
+        .map(|v| expand_vars_depth(v, vars, depth))
         .unwrap_or_else(|| format!("$({inner})"))
 }
 
@@ -454,19 +461,19 @@ fn split3(s: &str) -> (String, String, String) {
     (a, b, c)
 }
 
-fn make_subst(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_subst(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (from, to, text) = split3(args);
-    let from = expand_vars(from.trim(), vars);
-    let to   = expand_vars(&to,   vars);  // intentionally keep internal spaces
-    let text = expand_vars(text.trim(), vars);
+    let from = expand_vars_depth(from.trim(), vars, depth);
+    let to   = expand_vars_depth(&to,   vars, depth);  // intentionally keep internal spaces
+    let text = expand_vars_depth(text.trim(), vars, depth);
     text.replace(from.as_str(), to.as_str())
 }
 
-fn make_patsubst(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_patsubst(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (pat, rep, text) = split3(args);
-    let pat  = expand_vars(pat.trim(),  vars);
-    let rep  = expand_vars(rep.trim(),  vars);
-    let text = expand_vars(text.trim(), vars);
+    let pat  = expand_vars_depth(pat.trim(),  vars, depth);
+    let rep  = expand_vars_depth(rep.trim(),  vars, depth);
+    let text = expand_vars_depth(text.trim(), vars, depth);
     text.split_whitespace()
         .map(|w| patsubst_word(w, &pat, &rep))
         .collect::<Vec<_>>().join(" ")
@@ -488,18 +495,18 @@ fn patsubst_word(word: &str, pat: &str, rep: &str) -> String {
     }
 }
 
-fn make_findstring(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_findstring(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (find, text) = split2(args);
-    let find = expand_vars(find.trim(), vars);
-    let text = expand_vars(text.trim(), vars);
+    let find = expand_vars_depth(find.trim(), vars, depth);
+    let text = expand_vars_depth(text.trim(), vars, depth);
     if text.contains(find.as_str()) { find } else { String::new() }
 }
 
-fn make_filter(args: &str, vars: &HashMap<String, String>, invert: bool) -> String {
+fn make_filter(args: &str, vars: &HashMap<String, String>, invert: bool, depth: usize) -> String {
     let (pats_raw, text) = split2(args);
-    let pats_expanded = expand_vars(pats_raw.trim(), vars);
+    let pats_expanded = expand_vars_depth(pats_raw.trim(), vars, depth);
     let pats: Vec<&str> = pats_expanded.split_whitespace().collect();
-    let text = expand_vars(text.trim(), vars);
+    let text = expand_vars_depth(text.trim(), vars, depth);
     text.split_whitespace()
         .filter(|w| {
             let matched = pats.iter().any(|p| word_matches_pattern(w, p));
@@ -521,19 +528,19 @@ fn word_matches_pattern(word: &str, pat: &str) -> bool {
     }
 }
 
-fn make_word(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_word(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (n_raw, text) = split2(args);
-    let n_str = expand_vars(n_raw.trim(), vars);
-    let text  = expand_vars(text.trim(),  vars);
+    let n_str = expand_vars_depth(n_raw.trim(), vars, depth);
+    let text  = expand_vars_depth(text.trim(),  vars, depth);
     let n: usize = n_str.trim().parse().unwrap_or(0);
     text.split_whitespace().nth(n.saturating_sub(1)).unwrap_or("").to_string()
 }
 
-fn make_wordlist(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_wordlist(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let parts = split_args(args, 3);
-    let s = expand_vars(parts.first().map(String::as_str).unwrap_or(""), vars);
-    let e = expand_vars(parts.get(1).map(String::as_str).unwrap_or(""), vars);
-    let text = expand_vars(parts.get(2).map(String::as_str).unwrap_or(""), vars);
+    let s = expand_vars_depth(parts.first().map(String::as_str).unwrap_or(""), vars, depth);
+    let e = expand_vars_depth(parts.get(1).map(String::as_str).unwrap_or(""), vars, depth);
+    let text = expand_vars_depth(parts.get(2).map(String::as_str).unwrap_or(""), vars, depth);
     let start: usize = s.trim().parse().unwrap_or(1);
     let end:   usize = e.trim().parse().unwrap_or(0);
     text.split_whitespace()
@@ -543,28 +550,28 @@ fn make_wordlist(args: &str, vars: &HashMap<String, String>) -> String {
         .collect::<Vec<_>>().join(" ")
 }
 
-fn make_addsuffix(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_addsuffix(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (suf, text) = split2(args);
-    let suf  = expand_vars(suf.trim(),  vars);
-    let text = expand_vars(text.trim(), vars);
+    let suf  = expand_vars_depth(suf.trim(),  vars, depth);
+    let text = expand_vars_depth(text.trim(), vars, depth);
     text.split_whitespace()
         .map(|w| format!("{}{}", w, suf))
         .collect::<Vec<_>>().join(" ")
 }
 
-fn make_addprefix(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_addprefix(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (pre, text) = split2(args);
-    let pre  = expand_vars(pre.trim(),  vars);
-    let text = expand_vars(text.trim(), vars);
+    let pre  = expand_vars_depth(pre.trim(),  vars, depth);
+    let text = expand_vars_depth(text.trim(), vars, depth);
     text.split_whitespace()
         .map(|w| format!("{}{}", pre, w))
         .collect::<Vec<_>>().join(" ")
 }
 
-fn make_join(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_join(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (list1, list2) = split2(args);
-    let l1 = expand_vars(list1.trim(), vars);
-    let l2 = expand_vars(list2.trim(), vars);
+    let l1 = expand_vars_depth(list1.trim(), vars, depth);
+    let l2 = expand_vars_depth(list2.trim(), vars, depth);
     let w1: Vec<&str> = l1.split_whitespace().collect();
     let w2: Vec<&str> = l2.split_whitespace().collect();
     let len = w1.len().max(w2.len());
@@ -573,36 +580,36 @@ fn make_join(args: &str, vars: &HashMap<String, String>) -> String {
         .collect::<Vec<_>>().join(" ")
 }
 
-fn make_if(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_if(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     let (cond, rest) = split2(args);
     let (then_part, else_part) = split2(&rest);
-    let cond_val = expand_vars(&cond, vars);
+    let cond_val = expand_vars_depth(&cond, vars, depth);
     if !cond_val.trim().is_empty() {
-        expand_vars(&then_part, vars)
+        expand_vars_depth(&then_part, vars, depth)
     } else {
-        expand_vars(&else_part, vars)
+        expand_vars_depth(&else_part, vars, depth)
     }
 }
 
-fn make_or(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_or(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     // $(or cond1,cond2,...) — return first non-empty
     let mut rest = args.to_string();
     loop {
         let (a, b) = split2(&rest);
-        let v = expand_vars(&a, vars);
+        let v = expand_vars_depth(&a, vars, depth);
         if !v.trim().is_empty() { return v; }
         if b.is_empty() { return String::new(); }
         rest = b;
     }
 }
 
-fn make_and(args: &str, vars: &HashMap<String, String>) -> String {
+fn make_and(args: &str, vars: &HashMap<String, String>, depth: usize) -> String {
     // $(and cond1,cond2,...) — return last if all non-empty, else ""
     let mut rest = args.to_string();
     let mut last;
     loop {
         let (a, b) = split2(&rest);
-        let v = expand_vars(&a, vars);
+        let v = expand_vars_depth(&a, vars, depth);
         if v.trim().is_empty() { return String::new(); }
         last = v;
         if b.is_empty() { return last; }
@@ -615,7 +622,7 @@ fn detect_source_type(
     url: &str,
     pkg_version: &str,
     pkg_name: &str,
-    vars: &HashMap<String, String>,
+    _vars: &HashMap<String, String>,
 ) -> SourceType {
     // codeload.github.com/<owner>/<repo>/tar.gz/<ref>
     if let Some(caps) = RE_CODELOAD.captures(url) {
