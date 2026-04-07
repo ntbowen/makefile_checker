@@ -848,7 +848,15 @@ static RE_CRATESIO: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static RE_NPM: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://registry\.npmjs\.org/([^/]+)/-/").unwrap()
+    // Match official registry and common CN mirrors that share the same URL structure:
+    //   registry.npmjs.org/<pkg>/-/
+    //   mirrors.tencent.com/npm/<pkg>/-/
+    //   registry.npmmirror.com/<pkg>/-/   (formerly taobao)
+    //   mirrors.huaweicloud.com/repository/npm/<pkg>/-/
+    //   registry.npmjs.cf/<pkg>/-/
+    Regex::new(
+        r"https?://(?:registry\.npmjs\.org|mirrors\.tencent\.com/npm|registry\.npmmirror\.com|mirrors\.huaweicloud\.com/repository/npm|registry\.npmjs\.cf)/([^/]+)/-/"
+    ).unwrap()
 });
 
 static RE_RUBYGEMS: LazyLock<Regex> = LazyLock::new(|| {
@@ -1004,6 +1012,38 @@ mod tests {
     fn test_npm() {
         let st = detect("https://registry.npmjs.org/lodash/-/lodash-1.2.3.tgz");
         assert!(matches!(st, SourceType::Npm { .. }));
+    }
+
+    #[test]
+    fn test_npm_tencent_mirror() {
+        // mirrors.tencent.com/npm/<pkg>/-/ is a common CN mirror used by OpenWrt node packages
+        let st = detect("https://mirrors.tencent.com/npm/argon2/-/argon2-0.44.0.tgz");
+        assert!(matches!(st, SourceType::Npm { package } if package == "argon2"),
+            "Tencent npm mirror should be detected as Npm source type");
+    }
+
+    #[test]
+    fn test_npm_npmmirror() {
+        let st = detect("https://registry.npmmirror.com/alexa-app/-/alexa-app-4.2.3.tgz");
+        assert!(matches!(st, SourceType::Npm { package } if package == "alexa-app"));
+    }
+
+    #[test]
+    fn test_npm_multi_url_tencent_first() {
+        // Simulates the actual node-argon2 pattern: tencent mirror first, npmjs second.
+        // The parser iterates source_urls and should find Npm from the first URL.
+        let url = "https://mirrors.tencent.com/npm/argon2/-/ https://registry.npmjs.org/argon2/-/";
+        let source_urls: Vec<String> = url.split_whitespace()
+            .filter(|u| u.starts_with("http"))
+            .map(|u| u.to_string())
+            .collect();
+        let source_type = source_urls
+            .iter()
+            .map(|u| detect_source_type(u, "0.44.0", "node-argon2", &std::collections::HashMap::new()))
+            .find(|t| !matches!(t, SourceType::Unknown))
+            .unwrap_or(SourceType::Unknown);
+        assert!(matches!(source_type, SourceType::Npm { package } if package == "argon2"),
+            "Should detect Npm from tencent mirror (first URL) without needing npmjs.org");
     }
 
     #[test]

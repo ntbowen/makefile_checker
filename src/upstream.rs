@@ -819,7 +819,26 @@ impl UpstreamChecker {
         package: &str,
     ) -> Result<UpstreamInfo> {
         let pkg = if package.is_empty() { &parsed.pkg_name } else { package };
-        let api_url = format!("https://registry.npmjs.org/{}/latest", pkg);
+
+        // Prefer the mirror already configured in PKG_SOURCE_URL so that the
+        // tool works in network-restricted environments (e.g. CN mirrors only).
+        // Supported mirror base URLs (same /<pkg>/latest API as npmjs.org):
+        //   mirrors.tencent.com/npm  ->  https://mirrors.tencent.com/npm/<pkg>/latest
+        //   registry.npmmirror.com   ->  https://registry.npmmirror.com/<pkg>/latest
+        // Fall back to registry.npmjs.org for any other / unrecognised host.
+        let registry_base = parsed.source_url.as_deref()
+            .and_then(|u| {
+                if u.contains("mirrors.tencent.com/npm") {
+                    Some("https://mirrors.tencent.com/npm")
+                } else if u.contains("registry.npmmirror.com") {
+                    Some("https://registry.npmmirror.com")
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("https://registry.npmjs.org");
+
+        let api_url = format!("{}/{}/latest", registry_base, pkg);
         let upstream_url = format!("https://www.npmjs.com/package/{}", pkg);
 
         #[derive(Deserialize)]
