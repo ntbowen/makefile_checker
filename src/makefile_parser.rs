@@ -174,6 +174,24 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
     // then split on whitespace to get individual mirror URLs.
     let raw_source_url = vars.get("PKG_SOURCE_URL").cloned().unwrap_or_default();
     let expanded_source_url = expand_vars(&raw_source_url, &vars);
+    // Detect @MIRROR macros before http filtering — these are OpenWrt shorthand
+    // that won't pass the http:// filter below.
+    // Currently handled: @SF/<project> → SourceForge (has upstream checker).
+    // @GNU, @GNOME, @APACHE, @KERNEL etc. are left as Unknown for now.
+    let mirror_macro_type: Option<SourceType> = expanded_source_url
+        .split_whitespace()
+        .find_map(|token| {
+            if let Some(rest) = token.strip_prefix("@SF/") {
+                // @SF/projectname[/path] → SourceForge
+                let project = rest.split('/').next().unwrap_or(rest);
+                let project = expand_vars(project, &vars);
+                if !project.is_empty() && !project.contains("$(") {
+                    return Some(SourceType::SourceForge { project });
+                }
+            }
+            None
+        });
+
     let source_urls: Vec<String> = if expanded_source_url.is_empty() {
         vec![]
     } else {
@@ -200,7 +218,9 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
 
     // Fallback: infer source type from ecosystem-specific variables when URL
     // detection fails (common in perl/python/php/node packages).
-    let source_type = source_type_from_url.unwrap_or_else(|| {
+    let source_type = source_type_from_url
+        .or(mirror_macro_type)
+        .unwrap_or_else(|| {
         // 0. GitHub bare-git URL: github.com/<owner>/<repo>.git
         //    Combined with PKG_SOURCE_VERSION to decide commit vs tag.
         for url in &source_urls {
@@ -1677,6 +1697,22 @@ mod tests {
         assert!(matches!(st, SourceType::GitHubCommit { owner, repo, .. }
             if owner == "nxp-qoriq" && repo == "qoriq-fm-ucode"),
             "github.com bare URL + commit hash should be GitHubCommit");
+    }
+
+    #[test]
+    fn test_at_sf_macro_sourceforge() {
+        // dejavu-fonts-ttf: PKG_SOURCE_URL:=@SF/dejavu
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@SF/dejavu")]);
+        assert!(matches!(st, SourceType::SourceForge { project } if project == "dejavu"),
+            "@SF/<project> should map to SourceForge");
+    }
+
+    #[test]
+    fn test_at_sf_macro_with_subpath() {
+        // emailrelay: PKG_SOURCE_URL:=@SF/emailrelay/1.9.2
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@SF/emailrelay/1.9.2")]);
+        assert!(matches!(st, SourceType::SourceForge { project } if project == "emailrelay"),
+            "@SF/<project>/<subpath> should use first segment as project");
     }
 
     #[test]
