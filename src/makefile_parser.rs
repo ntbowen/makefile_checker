@@ -229,6 +229,56 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
             }
         }
 
+        // 0b. CPAN directory URL + PKG_SOURCE_NAME (perl packages like perl-ack)
+        //     PKG_SOURCE_URL = https://www.cpan.org/authors/id/P/PE/PETDANCE/
+        //     PKG_SOURCE_NAME = Authen-SASL  (the CPAN distribution name)
+        for url in &source_urls {
+            if RE_CPAN_DIR.is_match(url) {
+                // Prefer PKG_SOURCE_NAME over pkg_name (strip perl- prefix)
+                let module = vars.get("PKG_SOURCE_NAME")
+                    .map(|v| expand_vars(v, &vars))
+                    .filter(|v| !v.is_empty() && !v.contains("$("))
+                    .unwrap_or_else(|| {
+                        // Fall back: strip "perl-" prefix from pkg_name
+                        pkg_name.trim_start_matches("perl-")
+                            .split('-')
+                            .map(|w| {
+                                let mut c = w.chars();
+                                match c.next() {
+                                    None => String::new(),
+                                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                                }
+                            })
+                            .collect::<Vec<_>>().join("-")
+                    });
+                if !module.is_empty() {
+                    return SourceType::Cpan { module };
+                }
+            }
+        }
+
+        // 0c. GitHub bare repo URL: github.com/<owner>/<repo> (no .git, no sub-path)
+        //     Combined with PKG_SOURCE_VERSION to decide commit vs tag (same as .git case)
+        for url in &source_urls {
+            if let Some(caps) = RE_GITHUB_BARE.captures(url) {
+                let owner = caps[1].to_string();
+                let repo  = caps[2].to_string();
+                if let Some(ver) = &pkg_source_version {
+                    if RE_COMMIT_HASH.is_match(ver) {
+                        return SourceType::GitHubCommit { owner, repo, commit: ver.clone() };
+                    } else {
+                        let tag_template = detect_tag_template(ver, &pkg_version);
+                        return SourceType::GitHubRelease { owner, repo, tag_template };
+                    }
+                }
+                return SourceType::GitHubRelease {
+                    owner,
+                    repo,
+                    tag_template: TagTemplate::WithV,
+                };
+            }
+        }
+
         // 1. PyPI: PYPI_NAME variable (python-* packages often omit PKG_SOURCE_URL)
         if let Some(name) = vars.get("PYPI_NAME") {
             let name = expand_vars(name, &vars);
@@ -970,7 +1020,19 @@ static RE_HACKAGE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static RE_CPAN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.cpan\.org|cpan\.metacpan\.org|search\.cpan\.org)/[^/]+/[^/]*/([A-Za-z][A-Za-z0-9:_-]+)-").unwrap()
+    // Matches full path including package name:  cpan.org/.../Authen-SASL-2.16.tar.gz
+    // Also matches author directory URLs:       cpan.org/authors/id/G/GB/GBARR/
+    Regex::new(r"https?://(?:www\.cpan\.org|cpan\.metacpan\.org|search\.cpan\.org)/(?:[^/]+/)*([A-Za-z][A-Za-z0-9:_-]+)-").unwrap()
+});
+
+// Matches the cpan.org/authors/ directory URL (no package name embedded)
+static RE_CPAN_DIR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https?://(?:www\.cpan\.org|cpan\.metacpan\.org|search\.cpan\.org)/authors/").unwrap()
+});
+
+// github.com/<owner>/<repo>  — bare repo URL without .git suffix or any sub-path
+static RE_GITHUB_BARE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^https://github\.com/([^/]+)/([^/]+)$").unwrap()
 });
 
 static RE_KERNELORG: LazyLock<Regex> = LazyLock::new(|| {
@@ -1581,6 +1643,52 @@ mod tests {
         assert!(matches!(st, SourceType::GitHubRelease { owner, repo, .. }
             if owner == "NXP" && repo == "qoriq-mc-binary"),
             "github.com/*.git + tag string should be GitHubRelease");
+    }
+
+    #[test]
+    fn test_fallback_cpan_dir_url_with_source_name() {
+        // perl-authen-sasl: URL is author directory, module name in PKG_SOURCE_NAME
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://www.cpan.org/authors/id/G/GB/GBARR/"),
+            ("PKG_SOURCE_NAME", "Authen-SASL"),
+        ]);
+        assert!(matches!(st, SourceType::Cpan { module } if module == "Authen-SASL"),
+            "cpan.org directory URL + PKG_SOURCE_NAME should give Cpan");
+    }
+
+    #[test]
+    fn test_fallback_cpan_metacpan_dir_url() {
+        // perl-future: cpan.metacpan.org directory URL
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://cpan.metacpan.org/authors/id/P/PE/PEVANS"),
+            ("PKG_SOURCE_NAME", "Future"),
+        ]);
+        assert!(matches!(st, SourceType::Cpan { module } if module == "Future"),
+            "cpan.metacpan.org directory URL + PKG_SOURCE_NAME should give Cpan");
+    }
+
+    #[test]
+    fn test_fallback_github_bare_url_with_pkg_source_version_commit() {
+        // fman-ucode: github.com/nxp-qoriq/qoriq-fm-ucode (no .git, no path)
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://github.com/nxp-qoriq/qoriq-fm-ucode"),
+            ("PKG_SOURCE_VERSION", "1a2b3c4d5e6f7890abcdef1234567890abcdef12"),
+        ]);
+        assert!(matches!(st, SourceType::GitHubCommit { owner, repo, .. }
+            if owner == "nxp-qoriq" && repo == "qoriq-fm-ucode"),
+            "github.com bare URL + commit hash should be GitHubCommit");
+    }
+
+    #[test]
+    fn test_fallback_github_bare_url_with_tag() {
+        // ls-rcw: github.com/nxp-qoriq/rcw (no .git, no path), tag-like version
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://github.com/nxp-qoriq/rcw"),
+            ("PKG_SOURCE_VERSION", "LSDK-21.08"),
+        ]);
+        assert!(matches!(st, SourceType::GitHubRelease { owner, repo, .. }
+            if owner == "nxp-qoriq" && repo == "rcw"),
+            "github.com bare URL + tag string should be GitHubRelease");
     }
 
 }
