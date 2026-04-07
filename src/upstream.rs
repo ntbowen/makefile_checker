@@ -84,6 +84,7 @@ pub struct UpstreamChecker {
     github_client: reqwest::Client,
     plain_client: reqwest::Client,
     retry_times: u32,
+    has_github_token: bool,
 }
 
 impl UpstreamChecker {
@@ -124,7 +125,8 @@ impl UpstreamChecker {
             .build()
             .context("build plain http client")?;
 
-        Ok(Self { github_client, plain_client, retry_times })
+        let has_github_token = github_token.map_or(false, |t| !t.is_empty());
+        Ok(Self { github_client, plain_client, retry_times, has_github_token })
     }
 
     pub async fn check(&self, parsed: &ParsedMakefile, rule: &PkgRule) -> UpstreamInfo {
@@ -258,6 +260,34 @@ impl UpstreamChecker {
         }
     }
 
+    // ── GitHub API helper: sends request and converts 403/429 to diagnostic errors ──
+
+    async fn github_send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let resp = req.send().await.context("fetch GitHub API")?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // Try to read the body for GitHub's message
+            let body = resp.text().await.unwrap_or_default();
+            let is_rate_limit = body.contains("rate limit") || body.contains("rate_limit")
+                || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+            if is_rate_limit {
+                if self.has_github_token {
+                    return Err(anyhow::anyhow!(
+                        "GitHub API rate limit exceeded (token is set but limit still hit; \
+                         wait a moment or use a token with higher quota)"
+                    ));
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "GitHub API rate limit exceeded (no token configured; \
+                         set a GitHub token in Settings to get 5000 req/h instead of 60 req/h)"
+                    ));
+                }
+            }
+            return Err(anyhow::anyhow!("GitHub API HTTP {}: {}", status, body.chars().take(200).collect::<String>()));
+        }
+        resp.error_for_status().context("GitHub API HTTP error")
+    }
+
     // ─────────────────────────── GitHub Release ───────────────────────────
 
     async fn check_github_release(
@@ -271,11 +301,7 @@ impl UpstreamChecker {
         let upstream_url = format!("https://github.com/{}/{}/releases", owner, repo);
 
         let releases: Vec<GithubRelease> = self
-            .github_client
-            .get(&api_url)
-            .query(&[("per_page", "20")])
-            .send().await.context("fetch releases")?
-            .error_for_status().context("releases HTTP error")?
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "20")])).await?
             .json().await.context("parse releases JSON")?;
 
         // Skip prerelease, draft, and pre-release tags (rc/alpha/beta/dev)
@@ -316,11 +342,7 @@ impl UpstreamChecker {
     ) -> Result<UpstreamInfo> {
         let api_url = format!("https://api.github.com/repos/{}/{}/tags", owner, repo);
         let tags: Vec<GithubTag> = self
-            .github_client
-            .get(&api_url)
-            .query(&[("per_page", "30")])
-            .send().await.context("fetch tags")?
-            .error_for_status().context("tags HTTP error")?
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "30")])).await?
             .json().await.context("parse tags JSON")?;
 
         // Filter out pre-release tags
@@ -365,11 +387,7 @@ impl UpstreamChecker {
         let upstream_url = format!("https://github.com/{}/{}/commits", owner, repo);
 
         let commits: Vec<GithubCommit> = self
-            .github_client
-            .get(&api_url)
-            .query(&[("per_page", "1")])
-            .send().await.context("fetch commits")?
-            .error_for_status().context("commits HTTP error")?
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "1")])).await?
             .json().await.context("parse commits JSON")?;
 
         if let Some(latest) = commits.first() {
@@ -409,11 +427,7 @@ impl UpstreamChecker {
         let upstream_url = format!("https://github.com/{}/{}/tags", owner, repo);
 
         let tags: Vec<GithubTag> = self
-            .github_client
-            .get(&api_url)
-            .query(&[("per_page", "30")])
-            .send().await.context("fetch tags")?
-            .error_for_status().context("tags HTTP error")?
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "30")])).await?
             .json().await.context("parse tags JSON")?;
 
         let prefix = tag_path_prefix.trim_end_matches('/');
