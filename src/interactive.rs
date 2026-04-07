@@ -251,6 +251,14 @@ fn configure(mut config: Config, lang: Lang) -> Result<Config> {
     }
     println!("  {}", CFG_PKG_RULES_HINT.get(lang).dimmed());
 
+    // Global pre-release toggle
+    println!();
+    config.include_prerelease = Confirm::with_theme(&theme)
+        .with_prompt(CFG_PRERELEASE.get(lang))
+        .default(config.include_prerelease)
+        .interact()?;
+    println!("{}", CFG_PRERELEASE_NOTE.get(lang).dimmed());
+
     // Language
     let lang_items = &["English", "中文"];
     let cur_lang_idx = match config.lang {
@@ -403,16 +411,27 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
     let pb_arc = Arc::new(pb);
     let concurrency = config.parallel_jobs;
     let check_msg = CHECK_CHECKING.get(lang);
-    let empty_rule = Arc::new(PkgRule::default());
+    let global_prerelease = config.include_prerelease;
+    let empty_rule = Arc::new(PkgRule {
+        include_prerelease: global_prerelease,
+        ..PkgRule::default()
+    });
 
     let results: Vec<CheckResult> = stream::iter(to_check.into_iter())
         .map(|parsed| {
             let checker = Arc::clone(&checker);
             let pb = Arc::clone(&pb_arc);
             let rules = Arc::clone(&pkg_rules);
+            // Merge global include_prerelease into per-pkg rule:
+            // pkg-level true always wins; otherwise fall back to global
             let rule = rules.get(&parsed.pkg_name)
-                .cloned()
-                .map(Arc::new)
+                .map(|r| {
+                    let mut merged = r.clone();
+                    if !merged.include_prerelease {
+                        merged.include_prerelease = global_prerelease;
+                    }
+                    Arc::new(merged)
+                })
                 .unwrap_or_else(|| Arc::clone(&empty_rule));
             let msg = format!("{} {}...", check_msg, parsed.pkg_name);
             async move {

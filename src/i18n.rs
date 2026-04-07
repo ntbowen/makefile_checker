@@ -207,6 +207,16 @@ pub const CFG_PKG_RULES_HINT: T = T(
     "提示：在 config.toml 的 [pkg_rules.<包名>] 下添加规则\n  可用字段：ignore_regex, min_version, max_version, strip_prefix, strip_suffix, include_prerelease, url_regex_url, url_regex_pattern",
 );
 
+// Pre-release global toggle
+pub const CFG_PRERELEASE: T = T(
+    "Include pre-release versions globally (alpha/beta/rc/dev)",
+    "全局包含预发布版本（alpha/beta/rc/dev）",
+);
+pub const CFG_PRERELEASE_NOTE: T = T(
+    "  (per-package override: set include_prerelease=true under [pkg_rules.<name>] in config.toml)",
+    "  （单包覆盖：在 config.toml 的 [pkg_rules.<包名>] 下设置 include_prerelease=true）",
+);
+
 // Misc
 pub const LANG_SELECT_PROMPT: &str = "Language / 语言";
 pub const SECONDS_SUFFIX: T = T("s", "秒");

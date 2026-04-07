@@ -47,6 +47,10 @@ pub struct Config {
     /// Per-package override rules keyed by PKG_NAME
     #[serde(default)]
     pub pkg_rules: HashMap<String, PkgRule>,
+    /// Global switch: when true, pre-release versions are included for ALL packages
+    /// (pkg_rules.include_prerelease=true on a specific package always overrides regardless)
+    #[serde(default)]
+    pub include_prerelease: bool,
     #[serde(default)]
     pub lang: Lang,
 }
@@ -89,6 +93,7 @@ impl Default for Config {
             ],
             skip_packages: vec![],
             pkg_rules: HashMap::new(),
+            include_prerelease: false,
             lang: Lang::En,
         }
     }
