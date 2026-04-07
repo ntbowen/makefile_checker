@@ -1153,9 +1153,10 @@ static RE_BITBUCKET_DOWNLOADS: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static RE_GITEA: LazyLock<Regex> = LazyLock::new(|| {
-    // Generic /owner/repo/archive/ref.tar.gz — filter known platforms in code
+    // Generic /owner/repo/archive/ref[.tar.gz] — filter known platforms in code
     // ref can contain dots (e.g. v1.2.3), so allow any non-slash chars
-    Regex::new(r"https://([^/]+)/([^/]+)/([^/]+)/archive/([^/]+)\.tar").unwrap()
+    // Optional .tar suffix to also match bare /archive/<ref> URLs (e.g. codeberg)
+    Regex::new(r"https://([^/]+)/([^/]+)/([^/]+)/archive/([^/?]+?)(?:\.tar.*)?$").unwrap()
 });
 
 static RE_SOURCEFORGE: LazyLock<Regex> = LazyLock::new(|| {
@@ -2016,6 +2017,20 @@ mod tests {
     }
 
     // ── obfs4proxy: expand $(PKG_NAME) in gitlab URL ───────────────────────
+
+    // ── codeberg.org /archive/ref (no extension) ─────────────────────────
+
+    #[test]
+    fn test_codeberg_archive_no_ext() {
+        // schroot: https://codeberg.org/shelter/reschroot/archive/release
+        let st = detect_source_type(
+            "https://codeberg.org/shelter/reschroot/archive/release",
+            "1.6.13", "schroot", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::Gitea { host, owner, repo, .. }
+            if host == "codeberg.org" && owner == "shelter" && repo == "reschroot"),
+            "codeberg.org /archive/<ref> without .tar should be Gitea");
+    }
 
     #[test]
     fn test_ltq_ifxos_gitlab_ugw_version() {

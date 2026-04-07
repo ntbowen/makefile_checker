@@ -249,11 +249,13 @@ impl UpstreamChecker {
                 )),
             SourceType::GoogleSource { repo_url } =>
                 Ok(self.unknown_info_with_url(parsed, "googlesource", repo_url)),
-            SourceType::Freedesktop { project } =>
-                Ok(self.unknown_info_with_url(
-                    parsed, "freedesktop",
-                    &format!("https://gitlab.freedesktop.org/{}/", project),
-                )),
+            SourceType::Freedesktop { project } => {
+                // gstreamer.freedesktop.org/src/<project> → gitlab.freedesktop.org/gstreamer/<project>
+                // gstreamer tags are plain version numbers (e.g. 1.26.4, not v1.26.4)
+                self.check_gitlab(parsed, "gitlab.freedesktop.org",
+                    "gstreamer", &project,
+                    &TagTemplate::Plain).await
+            },
             SourceType::NoSource =>
                 Ok(self.unknown_info(parsed, "no-source")),
             SourceType::OpenWrtMirror =>
@@ -553,10 +555,16 @@ impl UpstreamChecker {
             .error_for_status().context("gitlab tags HTTP error")?
             .json().await.context("parse gitlab tags JSON")?;
 
-        let stable: Vec<&GitLabTag> = tags
+        let mut stable: Vec<&GitLabTag> = tags
             .iter()
             .filter(|t| !is_prerelease_tag(&t.name))
             .collect();
+        // Sort by semver descending (handles GitLab instances that ignore order_by=version)
+        stable.sort_by(|a, b| {
+            let va = extract_version_from_tag(&a.name, tag_template);
+            let vb = extract_version_from_tag(&b.name, tag_template);
+            version_cmp(&vb, &va)
+        });
 
         if let Some(tag) = stable.first() {
             let version = extract_version_from_tag(&tag.name, tag_template);
