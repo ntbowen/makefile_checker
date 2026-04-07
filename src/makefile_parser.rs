@@ -201,6 +201,34 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
     // Fallback: infer source type from ecosystem-specific variables when URL
     // detection fails (common in perl/python/php/node packages).
     let source_type = source_type_from_url.unwrap_or_else(|| {
+        // 0. GitHub bare-git URL: github.com/<owner>/<repo>.git
+        //    Combined with PKG_SOURCE_VERSION to decide commit vs tag.
+        for url in &source_urls {
+            if let Some(caps) = RE_GITHUB_GIT.captures(url) {
+                let owner = caps[1].to_string();
+                let repo  = caps[2].to_string();
+                if let Some(ver) = &pkg_source_version {
+                    if RE_COMMIT_HASH.is_match(ver) {
+                        return SourceType::GitHubCommit {
+                            owner,
+                            repo,
+                            commit: ver.clone(),
+                        };
+                    } else {
+                        // Tag-like version string (e.g. mc_release_10.39.0)
+                        let tag_template = detect_tag_template(ver, &pkg_version);
+                        return SourceType::GitHubRelease { owner, repo, tag_template };
+                    }
+                }
+                // No PKG_SOURCE_VERSION — treat as GitHubRelease with plain tag
+                return SourceType::GitHubRelease {
+                    owner,
+                    repo,
+                    tag_template: TagTemplate::WithV,
+                };
+            }
+        }
+
         // 1. PyPI: PYPI_NAME variable (python-* packages often omit PKG_SOURCE_URL)
         if let Some(name) = vars.get("PYPI_NAME") {
             let name = expand_vars(name, &vars);
@@ -778,6 +806,17 @@ fn detect_source_type(
         }
     }
 
+    // github.com/<owner>/<repo>/releases/download/<tag>/
+    // Used by packages that set PKG_SOURCE_URL to the download dir and
+    // PKG_SOURCE to the filename (e.g. mac80211, pcapplusplus)
+    if let Some(caps) = RE_GITHUB_RELEASES_DOWNLOAD.captures(url) {
+        let owner = caps[1].to_string();
+        let repo = caps[2].to_string();
+        let tag_ref = caps[3].to_string();
+        let tag_template = detect_tag_template(&tag_ref, pkg_version);
+        return SourceType::GitHubRelease { owner, repo, tag_template };
+    }
+
     // SourceForge: downloads.sourceforge.net/project/<proj>/
     if let Some(caps) = RE_SOURCEFORGE.captures(url) {
         return SourceType::SourceForge { project: caps[1].to_string() };
@@ -868,6 +907,16 @@ static RE_CODELOAD: LazyLock<Regex> = LazyLock::new(|| {
 
 static RE_GITHUB_ARCHIVE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https://github\.com/([^/]+)/([^/]+)/archive/(.+?)\.tar\.gz").unwrap()
+});
+
+// github.com/<owner>/<repo>/releases/download/<tag>/ (trailing slash, file appended separately)
+static RE_GITHUB_RELEASES_DOWNLOAD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/?$").unwrap()
+});
+
+// github.com/<owner>/<repo>.git  (bare git clone URL)
+static RE_GITHUB_GIT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https://github\.com/([^/]+)/([^/]+)\.git$").unwrap()
 });
 
 static RE_COMMIT_HASH: LazyLock<Regex> = LazyLock::new(|| {
@@ -1480,6 +1529,58 @@ mod tests {
         let st = parse_fake(&[("PKG_NPM_NAME", "lodash")]);
         assert!(matches!(st, SourceType::Npm { package } if package == "lodash"),
             "PKG_NPM_NAME alone should trigger Npm source type");
+    }
+
+    // ── GitHub releases/download and bare .git URL ────────────────────────
+
+    #[test]
+    fn test_github_releases_download_with_v_prefix() {
+        // mac80211: releases/download/backports-v6.18.7 (custom prefix)
+        let st = detect_source_type(
+            "https://github.com/openwrt/backports/releases/download/backports-v6.18.7",
+            "6.18.7", "mac80211", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GitHubRelease { owner, repo, tag_template }
+            if owner == "openwrt" && repo == "backports"
+            && matches!(tag_template, TagTemplate::Custom(_))),
+            "releases/download with custom prefix should be GitHubRelease Custom");
+    }
+
+    #[test]
+    fn test_github_releases_download_plain_v() {
+        // pcapplusplus: releases/download/v21.11
+        let st = detect_source_type(
+            "https://github.com/seladb/PcapPlusPlus/releases/download/v21.11/",
+            "21.11", "pcapplusplus", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GitHubRelease { owner, repo, tag_template }
+            if owner == "seladb" && repo == "PcapPlusPlus"
+            && matches!(tag_template, TagTemplate::WithV)),
+            "releases/download with v prefix should be GitHubRelease WithV");
+    }
+
+    #[test]
+    fn test_fallback_github_git_commit() {
+        // lua-md5: PKG_SOURCE_URL ends in .git, PKG_SOURCE_VERSION is commit hash
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://github.com/keplerproject/md5.git"),
+            ("PKG_SOURCE_VERSION", "2a98633d7587a4900cfa7cbed340f377f4acd930"),
+        ]);
+        assert!(matches!(st, SourceType::GitHubCommit { owner, repo, .. }
+            if owner == "keplerproject" && repo == "md5"),
+            "github.com/*.git + commit hash should be GitHubCommit");
+    }
+
+    #[test]
+    fn test_fallback_github_git_tag() {
+        // ls-mc: PKG_SOURCE_URL ends in .git, PKG_SOURCE_VERSION is tag
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://github.com/NXP/qoriq-mc-binary.git"),
+            ("PKG_SOURCE_VERSION", "mc_release_10.39.0"),
+        ]);
+        assert!(matches!(st, SourceType::GitHubRelease { owner, repo, .. }
+            if owner == "NXP" && repo == "qoriq-mc-binary"),
+            "github.com/*.git + tag string should be GitHubRelease");
     }
 
 }
