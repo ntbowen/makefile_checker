@@ -623,8 +623,9 @@ fn detect_source_type(
         let repo = caps[2].to_string();
         let ref_part = caps[3].to_string();
 
-        // Check for commit hash (40 hex chars)
+        // Check for commit hash (40 hex chars) directly in the URL ref
         if RE_COMMIT_HASH.is_match(&ref_part) {
+            // URL ref is a commit hash — use it directly
             return SourceType::GitHubCommit {
                 owner,
                 repo,
@@ -632,16 +633,11 @@ fn detect_source_type(
             };
         }
 
-        // Check for PKG_SOURCE_VERSION (commit-based)
-        if let Some(src_ver) = vars.get("PKG_SOURCE_VERSION") {
-            if RE_COMMIT_HASH.is_match(src_ver) {
-                return SourceType::GitHubCommit {
-                    owner,
-                    repo,
-                    commit: src_ver.clone(),
-                };
-            }
-        }
+        // URL ref is NOT a commit hash (it's a tag like "v0.19.0").
+        // Do NOT let PKG_SOURCE_VERSION override this — the package has a proper
+        // release tag even if PKG_SOURCE_VERSION happens to hold a commit hash
+        // (e.g. tini: URL uses v$(PKG_VERSION) tag but also sets PKG_SOURCE_VERSION).
+        // Fall through to tag / release detection below.
 
         // refs/tags/<path> pattern (e.g. refs/tags/wrapper/26018)
         if ref_part.starts_with("refs/tags/") {
@@ -918,6 +914,52 @@ mod tests {
             "https://codeload.github.com/owner/repo/tar.gz/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
         );
         assert!(matches!(st, SourceType::GitHubCommit { .. }));
+    }
+
+    #[test]
+    fn test_tini_tag_not_overridden_by_pkg_source_version() {
+        // tini: URL ref is "v0.19.0" (a tag), but PKG_SOURCE_VERSION is a commit hash.
+        // Must be detected as GitHubRelease, not GitHubCommit.
+        let mut vars = HashMap::new();
+        vars.insert(
+            "PKG_SOURCE_VERSION".to_string(),
+            "de40ad007797e0dcd8b7126f27bb87401d224240".to_string(),
+        );
+        let st = detect_source_type(
+            "https://codeload.github.com/krallin/tini/tar.gz/v0.19.0",
+            "0.19.0",
+            "tini",
+            &vars,
+        );
+        assert!(
+            matches!(st, SourceType::GitHubRelease { .. }),
+            "expected GitHubRelease but got {:?}", st
+        );
+        if let SourceType::GitHubRelease { owner, repo, tag_template } = st {
+            assert_eq!(owner, "krallin");
+            assert_eq!(repo, "tini");
+            assert!(matches!(tag_template, TagTemplate::WithV));
+        }
+    }
+
+    #[test]
+    fn test_commit_hash_url_still_detected_as_commit() {
+        // fft-eval / tac_plus pattern: URL ref IS the 40-char commit hash
+        let mut vars = HashMap::new();
+        vars.insert(
+            "PKG_SOURCE_VERSION".to_string(),
+            "4d3b6faee428e3bd9f44ab6a3d70585ec50484a1".to_string(),
+        );
+        let st = detect_source_type(
+            "https://codeload.github.com/simonwunderlich/FFT_eval/tar.gz/4d3b6faee428e3bd9f44ab6a3d70585ec50484a1",
+            "2019-11-27",
+            "fft-eval",
+            &vars,
+        );
+        assert!(
+            matches!(st, SourceType::GitHubCommit { .. }),
+            "expected GitHubCommit but got {:?}", st
+        );
     }
 
     #[test]
