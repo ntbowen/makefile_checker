@@ -242,6 +242,27 @@ impl UpstreamChecker {
                 self.check_gomodule(parsed, module_path).await,
             SourceType::UrlRegex { url, regex } =>
                 self.check_url_regex(parsed, url, regex).await,
+            SourceType::NoSource =>
+                Ok(self.unknown_info(parsed, "no-source")),
+            SourceType::OpenWrtMirror =>
+                Ok(self.unknown_info(parsed, "openwrt-mirror")),
+            SourceType::GnuMirror { mirror, package } => {
+                let upstream_url = match mirror.as_str() {
+                    "GNU"      => format!("https://ftpmirror.gnu.org/{}/", package),
+                    "GNOME"    => format!("https://download.gnome.org/sources/{}/", package),
+                    "APACHE"   => format!("https://downloads.apache.org/{}/", package),
+                    "SAVANNAH" => format!("https://download.savannah.gnu.org/releases/{}/", package),
+                    "KERNEL"   => format!("https://www.kernel.org/pub/", ),
+                    _          => format!("https://ftpmirror.gnu.org/{}/", package),
+                };
+                Ok(self.unknown_info_with_url(
+                    parsed,
+                    &format!("{}-mirror", mirror.to_lowercase()),
+                    &upstream_url,
+                ))
+            },
+            SourceType::CustomUrl { url } =>
+                Ok(self.unknown_info_with_url(parsed, "custom-url", url)),
             SourceType::Unknown => Ok(self.unknown_info(parsed, "unknown source")),
         };
 
@@ -1108,7 +1129,7 @@ impl UpstreamChecker {
             is_outdated: None,
             upstream_url: None,
             check_error: Some(reason.to_string()),
-            source_backend: "unknown".to_string(),
+            source_backend: reason.to_string(),
             hash_mismatch: None,
         }
     }

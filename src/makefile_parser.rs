@@ -100,6 +100,21 @@ pub enum SourceType {
         url: String,
         regex: String,
     },
+    /// No PKG_SOURCE_URL: package is maintained directly in the feed (scripts/configs only)
+    NoSource,
+    /// PKG_SOURCE_URL uses @OPENWRT or @IMMORTALWRT private mirror (source not publicly accessible)
+    OpenWrtMirror,
+    /// PKG_SOURCE_URL uses @GNU / @GNOME / @APACHE / @SAVANNAH / @KERNEL mirror macro
+    GnuMirror {
+        /// Mirror name, e.g. "GNU", "GNOME", "APACHE", "SAVANNAH", "KERNEL"
+        mirror: String,
+        /// Package/project name extracted from the macro argument
+        package: String,
+    },
+    /// PKG_SOURCE_URL is a plain HTTP download directory not matching any known forge/registry
+    CustomUrl {
+        url: String,
+    },
     Unknown,
 }
 
@@ -176,8 +191,6 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
     let expanded_source_url = expand_vars(&raw_source_url, &vars);
     // Detect @MIRROR macros before http filtering — these are OpenWrt shorthand
     // that won't pass the http:// filter below.
-    // Currently handled: @SF/<project> → SourceForge (has upstream checker).
-    // @GNU, @GNOME, @APACHE, @KERNEL etc. are left as Unknown for now.
     let mirror_macro_type: Option<SourceType> = expanded_source_url
         .split_whitespace()
         .find_map(|token| {
@@ -194,6 +207,27 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
                 if !project.is_empty() && !project.contains("$(") {
                     return Some(SourceType::SourceForge { project });
                 }
+            } else if token.starts_with("@OPENWRT") || token.starts_with("@IMMORTALWRT") {
+                return Some(SourceType::OpenWrtMirror);
+            } else if let Some((mirror, rest)) = [
+                ("GNU", token.strip_prefix("@GNU/")),
+                ("GNOME", token.strip_prefix("@GNOME/")),
+                ("APACHE", token.strip_prefix("@APACHE/")),
+                ("SAVANNAH", token.strip_prefix("@SAVANNAH/")),
+                ("KERNEL", token.strip_prefix("@KERNEL/")),
+            ].iter().find_map(|(m, r)| r.map(|r| (*m, r))) {
+                // Extract the first path segment as package name
+                let pkg = rest.split('/').next().unwrap_or(rest);
+                let pkg = expand_vars(pkg, &vars);
+                let pkg = if pkg.is_empty() || pkg.contains("$(") {
+                    pkg_name.clone()
+                } else {
+                    pkg
+                };
+                return Some(SourceType::GnuMirror {
+                    mirror: mirror.to_string(),
+                    package: pkg,
+                });
             }
             None
         });
@@ -342,6 +376,14 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
             if !npm_name.is_empty() && !npm_name.contains("$(") {
                 return SourceType::Npm { package: npm_name };
             }
+        }
+        // 6. Plain HTTP URL that matched no known forge/registry → CustomUrl
+        if let Some(url) = source_urls.first() {
+            return SourceType::CustomUrl { url: url.clone() };
+        }
+        // 7. No PKG_SOURCE_URL at all → package is a local feed / script bundle
+        if raw_source_url.is_empty() {
+            return SourceType::NoSource;
         }
         SourceType::Unknown
     });
@@ -1716,6 +1758,64 @@ mod tests {
         assert!(matches!(st, SourceType::GitHubCommit { owner, repo, .. }
             if owner == "nxp-qoriq" && repo == "qoriq-fm-ucode"),
             "github.com bare URL + commit hash should be GitHubCommit");
+    }
+
+    #[test]
+    fn test_no_source() {
+        // mwan3, travelmate: no PKG_SOURCE_URL at all
+        let st = parse_fake(&[]);
+        assert!(matches!(st, SourceType::NoSource),
+            "empty PKG_SOURCE_URL should give NoSource");
+    }
+
+    #[test]
+    fn test_openwrt_mirror() {
+        // ltq-adsl, fibocom: @OPENWRT private mirror
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@OPENWRT")]);
+        assert!(matches!(st, SourceType::OpenWrtMirror),
+            "@OPENWRT should give OpenWrtMirror");
+    }
+
+    #[test]
+    fn test_immortalwrt_mirror() {
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@IMMORTALWRT")]);
+        assert!(matches!(st, SourceType::OpenWrtMirror),
+            "@IMMORTALWRT should give OpenWrtMirror");
+    }
+
+    #[test]
+    fn test_gnu_mirror() {
+        // libtool: @GNU/libtool
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@GNU/libtool")]);
+        assert!(matches!(st, SourceType::GnuMirror { mirror, package }
+            if mirror == "GNU" && package == "libtool"),
+            "@GNU/<name> should give GnuMirror");
+    }
+
+    #[test]
+    fn test_gnome_mirror() {
+        // libsoup3: @GNOME/libsoup/3.6
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@GNOME/libsoup/3.6")]);
+        assert!(matches!(st, SourceType::GnuMirror { mirror, package }
+            if mirror == "GNOME" && package == "libsoup"),
+            "@GNOME/<name>/... should give GnuMirror with first segment");
+    }
+
+    #[test]
+    fn test_apache_mirror() {
+        // apr: @APACHE/apr/
+        let st = parse_fake(&[("PKG_SOURCE_URL", "@APACHE/apr/")]);
+        assert!(matches!(st, SourceType::GnuMirror { mirror, package }
+            if mirror == "APACHE" && package == "apr"),
+            "@APACHE/<name>/ should give GnuMirror");
+    }
+
+    #[test]
+    fn test_custom_url() {
+        // bird2: https://bird.nic.cz/download/
+        let st = parse_fake(&[("PKG_SOURCE_URL", "https://bird.nic.cz/download/")]);
+        assert!(matches!(st, SourceType::CustomUrl { url } if url.contains("bird.nic.cz")),
+            "unrecognised HTTP URL should give CustomUrl");
     }
 
     #[test]
