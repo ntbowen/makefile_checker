@@ -26,6 +26,15 @@ pub struct PkgRule {
     pub url_regex_url: Option<String>,
     /// Regex with capture group 1 for version extraction
     pub url_regex_pattern: Option<String>,
+    /// Skip this package entirely (no upstream check)
+    #[serde(default)]
+    pub skip: bool,
+    /// Override upstream: use GitHub API for "owner/repo"
+    pub github: Option<String>,
+    /// Override upstream: use GitLab API for "host:owner/repo" or "owner/repo" (default gitlab.com)
+    pub gitlab: Option<String>,
+    /// Override upstream: use Gitea API for "host:owner/repo"
+    pub gitea: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

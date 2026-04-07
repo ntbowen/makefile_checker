@@ -198,9 +198,56 @@ impl UpstreamChecker {
     }
 
     async fn check_inner(&self, parsed: &ParsedMakefile, rule: &PkgRule) -> Result<UpstreamInfo> {
-        // PkgRule url_regex override: highest priority, bypasses source detection
+        // skip override: highest priority
+        if rule.skip {
+            return Ok(self.unknown_info(parsed, "skipped"));
+        }
+
+        // PkgRule url_regex override: bypasses source detection
         if let (Some(url), Some(pattern)) = (&rule.url_regex_url, &rule.url_regex_pattern) {
             return self.check_url_regex(parsed, url, pattern).await;
+        }
+
+        // PkgRule github override: "owner/repo"
+        if let Some(gh) = &rule.github {
+            let parts: Vec<&str> = gh.splitn(2, '/').collect();
+            if parts.len() == 2 {
+                let tag_template = crate::makefile_parser::TagTemplate::WithV;
+                return self.check_github_release(parsed, parts[0], parts[1], &tag_template).await;
+            }
+        }
+
+        // PkgRule gitlab override: "owner/repo" or "host:owner/repo"
+        if let Some(gl) = &rule.gitlab {
+            let (host, path) = if let Some(pos) = gl.find(':') {
+                (&gl[..pos], &gl[pos+1..])
+            } else {
+                ("gitlab.com", gl.as_str())
+            };
+            // owner may include subgroups; repo is last segment
+            let (owner, repo) = if let Some(pos) = path.rfind('/') {
+                (&path[..pos], &path[pos+1..])
+            } else {
+                ("", path)
+            };
+            let tag_template = crate::makefile_parser::TagTemplate::WithV;
+            return self.check_gitlab(parsed, host, owner, repo, &tag_template).await;
+        }
+
+        // PkgRule gitea override: "host:owner/repo"
+        if let Some(gt) = &rule.gitea {
+            let (host, path) = if let Some(pos) = gt.find(':') {
+                (&gt[..pos], &gt[pos+1..])
+            } else {
+                ("codeberg.org", gt.as_str())
+            };
+            let (owner, repo) = if let Some(pos) = path.rfind('/') {
+                (&path[..pos], &path[pos+1..])
+            } else {
+                ("", path)
+            };
+            let tag_template = crate::makefile_parser::TagTemplate::WithV;
+            return self.check_gitea(parsed, host, owner, repo, &tag_template).await;
         }
 
         let result = match &parsed.source_type {
