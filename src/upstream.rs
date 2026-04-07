@@ -247,6 +247,8 @@ impl UpstreamChecker {
                     parsed, "golang-dl",
                     "https://go.dev/dl/",
                 )),
+            SourceType::GoogleSource { repo_url } =>
+                Ok(self.unknown_info_with_url(parsed, "googlesource", repo_url)),
             SourceType::Freedesktop { project } =>
                 Ok(self.unknown_info_with_url(
                     parsed, "freedesktop",

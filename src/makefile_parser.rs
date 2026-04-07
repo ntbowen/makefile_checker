@@ -102,6 +102,10 @@ pub enum SourceType {
     },
     /// golang official release tarballs from go.dev/dl/ (e.g. golang1.26, golang-bootstrap)
     GoLang,
+    /// Android / Google source git repos (googlesource.com)
+    GoogleSource {
+        repo_url: String,
+    },
     /// freedesktop.org tarball download (gstreamer, libsoup, etc.)
     Freedesktop {
         project: String,
@@ -1068,6 +1072,17 @@ fn detect_source_type(
         }
     }
 
+    // OpenWrt / ImmortalWrt source mirrors (https://sources.openwrt.org/ etc.)
+    if RE_OPENWRT_SOURCES.is_match(url) {
+        return SourceType::OpenWrtMirror;
+    }
+
+    // Google source repositories: *.googlesource.com/path
+    if let Some(caps) = RE_GOOGLESOURCE.captures(url) {
+        let repo_url = caps[1].to_string();
+        return SourceType::GoogleSource { repo_url };
+    }
+
     SourceType::Unknown
 }
 
@@ -1116,8 +1131,10 @@ static RE_COMMIT_HASH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[0-9a-f]{40}$").unwrap()
 });
 
+// gitlab.<host>/owner[/subgroups]/<repo>/-/archive/<ref>/
+// cap[1]=host, cap[2]=full owner path (may include subgroups), cap[3]=repo, cap[4]=ref
 static RE_GITLAB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https://(gitlab\.[^/]+)/([^/]+)/([^/]+)/-/archive/([^/]+)/").unwrap()
+    Regex::new(r"https://(gitlab\.[^/]+)/(.+)/([^/]+)/-/archive/([^/]+)/").unwrap()
 });
 
 // gitlab.<host>/path/to/<repo>.git  (bare git clone URL, any gitlab instance)
@@ -1215,6 +1232,16 @@ static RE_GOMODULE: LazyLock<Regex> = LazyLock::new(|| {
 // go.dev/dl/ or golang.google.cn/dl/ or mirrors.*/golang/
 static RE_GOLANG_DL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://(?:go\.dev|golang\.google\.cn)/dl/").unwrap()
+});
+
+// OpenWrt / ImmortalWrt source tarballs hosting (not @MIRROR macro)
+static RE_OPENWRT_SOURCES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https?://(?:sources\.openwrt\.org|sources\.immortalwrt\.org)/").unwrap()
+});
+
+// Google source git: <host>.googlesource.com/path
+static RE_GOOGLESOURCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(https?://[^/]+\.googlesource\.com/[^/?]+(?:/[^/?]+)*)").unwrap()
 });
 
 // freedesktop.org tarball downloads: gstreamer.freedesktop.org/src/<name>
@@ -1959,6 +1986,65 @@ mod tests {
         );
         assert!(matches!(st, SourceType::Freedesktop { project } if project == "gst-plugins-base"),
             "freedesktop.org/src/<name> should capture last segment as project");
+    }
+
+    // ── sources.openwrt.org → OpenWrtMirror ───────────────────────────────
+
+    #[test]
+    fn test_openwrt_sources_url() {
+        // ltq-adsl-fw: https://sources.openwrt.org/
+        let st = detect_source_type(
+            "https://sources.openwrt.org/",
+            "1.0", "ltq-adsl-fw", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::OpenWrtMirror),
+            "sources.openwrt.org should map to OpenWrtMirror");
+    }
+
+    // ── googlesource.com → GoogleSource ───────────────────────────────────
+
+    #[test]
+    fn test_googlesource_adb() {
+        // adb: https://android.googlesource.com/platform/system/core
+        let st = detect_source_type(
+            "https://android.googlesource.com/platform/system/core",
+            "5.0.2", "adb", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GoogleSource { repo_url }
+            if repo_url.contains("googlesource.com")),
+            "googlesource.com URL should be GoogleSource");
+    }
+
+    // ── obfs4proxy: expand $(PKG_NAME) in gitlab URL ───────────────────────
+
+    #[test]
+    fn test_ltq_ifxos_gitlab_ugw_version() {
+        // ltq-ifxos: PKG_SOURCE_URL uses $(PKG_NAME) and $(UGW_VERSION) which both expand
+        // UGW_VERSION=8.5.2.10 → URL: gitlab.com/.../ifxos/-/archive/ugw_8.5.2.10/
+        let st = parse_fake(&[
+            ("PKG_NAME", "ifxos"),
+            ("PKG_SOURCE_URL", "https://gitlab.com/prpl-foundation/intel/$(PKG_NAME)/-/archive/ugw_$(UGW_VERSION)/"),
+            ("UGW_VERSION", "8.5.2.10"),
+            ("PKG_VERSION", "8.5.2.10"),
+        ]);
+        assert!(matches!(st, SourceType::GitLab { host, repo, .. }
+            if host == "gitlab.com" && repo == "ifxos"),
+            "gitlab.com /-/archive/ with UGW_VERSION should expand and match GitLab");
+    }
+
+    #[test]
+    fn test_obfs4proxy_gitlab_with_pkg_name() {
+        // PKG_SOURCE_URL:=https://gitlab.com/yawning/obfs4/-/archive/$(PKG_NAME)-$(PKG_VERSION)/
+        // After expansion: .../archive/obfs4proxy-0.0.14/
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://gitlab.com/yawning/obfs4/-/archive/$(PKG_NAME)-$(PKG_VERSION)/"),
+            ("PKG_VERSION", "0.0.14"),
+        ]);
+        // parse_fake sets PKG_NAME from the map; here pkg_name comes from the fake filename
+        // The URL still has unexpanded $(PKG_NAME) but expand_vars should resolve it from vars
+        assert!(matches!(st, SourceType::GitLab { host, owner, repo, .. }
+            if host == "gitlab.com" && owner == "yawning" && repo == "obfs4"),
+            "gitlab.com /-/archive/ should be GitLab even when tag contains pkg_name");
     }
 
     #[test]
