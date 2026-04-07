@@ -1,0 +1,54 @@
+[package]
+name = "makefile_checker"
+version = "0.1.0"
+edition = "2021"
+description = "OpenWrt Makefile upstream version checker"
+authors = ["zagwrt"]
+
+[[bin]]
+name = "makefile_checker"
+path = "src/main.rs"
+
+[dependencies]
+# async runtime
+tokio = { version = "1", features = ["full"] }
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+# JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# TOML config
+toml = "0.8"
+# interactive TUI
+dialoguer = "0.11"
+# colored terminal output
+colored = "2"
+# progress bar
+indicatif = "0.17"
+# Excel output
+rust_xlsxwriter = "0.79"
+# CSV output
+csv = "1"
+# regex
+regex = "1"
+# async semaphore / concurrency
+futures = "0.3"
+# directory walking
+walkdir = "2"
+# error handling
+anyhow = "1"
+thiserror = "1"
+# platform dirs
+dirs = "5"
+# table display
+comfy-table = "7"
+# URL parsing
+url = "2"
+# URL encoding (for GitLab project path)
+urlencoding = "2"
+# semver comparison
+semver = "1"
+# SHA-256 for PKG_HASH verification
+sha2 = "0.10"
+# time
+chrono = { version = "0.4", features = ["serde"] }
