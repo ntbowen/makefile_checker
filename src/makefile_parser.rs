@@ -78,6 +78,9 @@ pub enum SourceType {
     Cpan {
         module: String,
     },
+    Pecl {
+        package: String,
+    },
     KernelOrg {
         package: String,
     },
@@ -190,11 +193,54 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
     };
 
     // Try each URL until we get a recognised source type
-    let source_type = source_urls
+    let source_type_from_url = source_urls
         .iter()
         .map(|u| detect_source_type(u, &pkg_version, &pkg_name, &vars))
-        .find(|t| !matches!(t, SourceType::Unknown))
-        .unwrap_or(SourceType::Unknown);
+        .find(|t| !matches!(t, SourceType::Unknown));
+
+    // Fallback: infer source type from ecosystem-specific variables when URL
+    // detection fails (common in perl/python/php/node packages).
+    let source_type = source_type_from_url.unwrap_or_else(|| {
+        // 1. PyPI: PYPI_NAME variable (python-* packages often omit PKG_SOURCE_URL)
+        if let Some(name) = vars.get("PYPI_NAME") {
+            let name = expand_vars(name, &vars);
+            if !name.is_empty() && !name.contains("$(") {
+                return SourceType::PyPI { package: name };
+            }
+        }
+        // 2. CPAN (MetaCPAN): METACPAN_NAME + optional METACPAN_AUTHOR
+        if let Some(name) = vars.get("METACPAN_NAME") {
+            let name = expand_vars(name, &vars);
+            if !name.is_empty() && !name.contains("$(") {
+                return SourceType::Cpan { module: name };
+            }
+        }
+        // 3. PECL (PHP extensions): PECL_NAME variable
+        if let Some(name) = vars.get("PECL_NAME") {
+            let name = expand_vars(name, &vars);
+            if !name.is_empty() && !name.contains("$(") {
+                return SourceType::Pecl { package: name };
+            }
+        }
+        // 4. Scoped npm: PKG_NPM_SCOPE + PKG_NPM_NAME (e.g. @azure/event-hubs)
+        if let (Some(scope), Some(npm_name)) = (vars.get("PKG_NPM_SCOPE"), vars.get("PKG_NPM_NAME")) {
+            let scope = expand_vars(scope, &vars);
+            let npm_name = expand_vars(npm_name, &vars);
+            if !scope.is_empty() && !npm_name.is_empty()
+                && !scope.contains("$(") && !npm_name.contains("$(")
+            {
+                return SourceType::Npm { package: format!("@{}/{}", scope, npm_name) };
+            }
+        }
+        // 5. Unscoped npm fallback: PKG_NPM_NAME alone
+        if let Some(npm_name) = vars.get("PKG_NPM_NAME") {
+            let npm_name = expand_vars(npm_name, &vars);
+            if !npm_name.is_empty() && !npm_name.contains("$(") {
+                return SourceType::Npm { package: npm_name };
+            }
+        }
+        SourceType::Unknown
+    });
 
     Ok(Some(ParsedMakefile {
         path: path.to_path_buf(),
@@ -1378,6 +1424,62 @@ mod tests {
         assert_eq!(name, "node-modclean");
         assert_eq!(ver,  "3.0.0_beta1");
         assert_eq!(src,  "modclean-3.0.0-beta.1.tgz");
+    }
+
+    // ── Variable-based fallback source type detection ─────────────────────
+
+    fn parse_fake(extra_vars: &[(&str, &str)]) -> SourceType {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut content = String::from("PKG_NAME:=test-pkg\nPKG_VERSION:=1.0.0\n");
+        for (k, v) in extra_vars {
+            content.push_str(&format!("{}:={}\n", k, v));
+        }
+        // Unique filename per test to avoid concurrent writes to the same file
+        let mut h = DefaultHasher::new();
+        content.hash(&mut h);
+        let hash = h.finish();
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("test_fallback_{:x}_Makefile", hash));
+        std::fs::write(&path, &content).unwrap();
+        let parsed = parse_makefile(std::path::Path::new(&path)).unwrap().unwrap();
+        let _ = std::fs::remove_file(&path);
+        parsed.source_type
+    }
+
+    #[test]
+    fn test_fallback_pypi_name() {
+        let st = parse_fake(&[("PYPI_NAME", "cryptography")]);
+        assert!(matches!(st, SourceType::PyPI { package } if package == "cryptography"),
+            "PYPI_NAME should trigger PyPI source type");
+    }
+
+    #[test]
+    fn test_fallback_metacpan_name() {
+        let st = parse_fake(&[("METACPAN_NAME", "URI"), ("METACPAN_AUTHOR", "OALDERS")]);
+        assert!(matches!(st, SourceType::Cpan { module } if module == "URI"),
+            "METACPAN_NAME should trigger Cpan source type");
+    }
+
+    #[test]
+    fn test_fallback_pecl_name() {
+        let st = parse_fake(&[("PECL_NAME", "redis")]);
+        assert!(matches!(st, SourceType::Pecl { package } if package == "redis"),
+            "PECL_NAME should trigger Pecl source type");
+    }
+
+    #[test]
+    fn test_fallback_scoped_npm() {
+        let st = parse_fake(&[("PKG_NPM_SCOPE", "azure"), ("PKG_NPM_NAME", "event-hubs")]);
+        assert!(matches!(st, SourceType::Npm { package } if package == "@azure/event-hubs"),
+            "PKG_NPM_SCOPE + PKG_NPM_NAME should produce @scope/name");
+    }
+
+    #[test]
+    fn test_fallback_unscoped_npm() {
+        let st = parse_fake(&[("PKG_NPM_NAME", "lodash")]);
+        assert!(matches!(st, SourceType::Npm { package } if package == "lodash"),
+            "PKG_NPM_NAME alone should trigger Npm source type");
     }
 
 }

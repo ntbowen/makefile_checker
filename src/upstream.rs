@@ -230,6 +230,8 @@ impl UpstreamChecker {
                 self.check_hackage(parsed, package).await,
             SourceType::Cpan { module } =>
                 self.check_cpan(parsed, module).await,
+            SourceType::Pecl { package } =>
+                self.check_pecl(parsed, package).await,
             SourceType::KernelOrg { package } =>
                 self.check_kernelorg(parsed, package).await,
             SourceType::Cgit { repo_url } =>
@@ -838,7 +840,10 @@ impl UpstreamChecker {
             })
             .unwrap_or("https://registry.npmjs.org");
 
-        let api_url = format!("{}/{}/latest", registry_base, pkg);
+        // Scoped packages like @azure/event-hubs need the slash percent-encoded
+        // in the registry URL: registry.npmjs.org/@azure%2Fevent-hubs/latest
+        let pkg_encoded = pkg.replacen('/', "%2F", 1);
+        let api_url = format!("{}/{}/latest", registry_base, pkg_encoded);
         let upstream_url = format!("https://www.npmjs.com/package/{}", pkg);
 
         #[derive(Deserialize)]
@@ -991,6 +996,48 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "cpan".to_string(),
                 hash_mismatch: None,
+        })
+    }
+
+    // ──────────────────────────── PECL ────────────────────────────────────
+
+    async fn check_pecl(
+        &self,
+        parsed: &ParsedMakefile,
+        package: &str,
+    ) -> Result<UpstreamInfo> {
+        let name = if package.is_empty() { parsed.pkg_name.as_str() } else { package };
+        // PECL REST API: https://pecl.php.net/rest/r/<name>/stable.txt
+        let api_url = format!("https://pecl.php.net/rest/r/{}/stable.txt", name);
+        let upstream_url = format!("https://pecl.php.net/package/{}", name);
+
+        let version = self
+            .plain_client
+            .get(&api_url)
+            .send().await.context("fetch pecl")?
+            .error_for_status().context("pecl HTTP error")?
+            .text().await.context("read pecl response")?
+            .trim()
+            .to_string();
+
+        if version.is_empty() {
+            return Err(anyhow::anyhow!("pecl returned empty version for {}", name));
+        }
+
+        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+
+        Ok(UpstreamInfo {
+            pkg_name: parsed.pkg_name.clone(),
+            current_version: parsed.pkg_version.clone(),
+            latest_version: Some(version),
+            latest_tag: None,
+            latest_commit: None,
+            latest_hash_sha256: None,
+            is_outdated: Some(is_outdated),
+            upstream_url: Some(upstream_url),
+            check_error: None,
+            source_backend: "pecl".to_string(),
+            hash_mismatch: None,
         })
     }
 
