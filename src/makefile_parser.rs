@@ -100,6 +100,12 @@ pub enum SourceType {
         url: String,
         regex: String,
     },
+    /// golang official release tarballs from go.dev/dl/ (e.g. golang1.26, golang-bootstrap)
+    GoLang,
+    /// freedesktop.org tarball download (gstreamer, libsoup, etc.)
+    Freedesktop {
+        project: String,
+    },
     /// No PKG_SOURCE_URL: package is maintained directly in the feed (scripts/configs only)
     NoSource,
     /// PKG_SOURCE_URL uses @OPENWRT or @IMMORTALWRT private mirror (source not publicly accessible)
@@ -289,17 +295,38 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
             }
         }
 
-        // 0b. CPAN directory URL + PKG_SOURCE_NAME (perl packages like perl-ack)
+        // 0b. CPAN directory URL: extract module name from PKG_SOURCE_NAME, then
+        //     PKG_SOURCE (strip -VERSION.ext), finally derive from pkg_name.
         //     PKG_SOURCE_URL = https://www.cpan.org/authors/id/P/PE/PETDANCE/
-        //     PKG_SOURCE_NAME = Authen-SASL  (the CPAN distribution name)
+        //     PKG_SOURCE_URL = https://search.cpan.org/CPAN/authors/id/C/CB/CBARRATT/
         for url in &source_urls {
             if RE_CPAN_DIR.is_match(url) {
-                // Prefer PKG_SOURCE_NAME over pkg_name (strip perl- prefix)
                 let module = vars.get("PKG_SOURCE_NAME")
                     .map(|v| expand_vars(v, &vars))
                     .filter(|v| !v.is_empty() && !v.contains("$("))
+                    // Try PKG_SOURCE: strip trailing -<version>.<ext>
+                    .or_else(|| {
+                        vars.get("PKG_SOURCE").map(|v| {
+                            let s = expand_vars(v, &vars);
+                            // Strip -(v?)<version>.<ext> suffix
+                            let s = s.trim_end_matches(".tar.gz")
+                                      .trim_end_matches(".tar.bz2")
+                                      .trim_end_matches(".tgz");
+                            // Remove trailing hyphen + version (may start with 'v')
+                            let pkg_ver = &pkg_version;
+                            let stripped = if let Some(pos) = s.rfind(&format!("-{}", pkg_ver)) {
+                                &s[..pos]
+                            } else if let Some(pos) = s.rfind(&format!("-v{}", pkg_ver)) {
+                                &s[..pos]
+                            } else {
+                                s
+                            };
+                            stripped.to_string()
+                        })
+                        .filter(|v| !v.is_empty() && !v.contains("$("))
+                    })
                     .unwrap_or_else(|| {
-                        // Fall back: strip "perl-" prefix from pkg_name
+                        // Last resort: capitalise pkg_name after stripping perl- prefix
                         pkg_name.trim_start_matches("perl-")
                             .split('-')
                             .map(|w| {
@@ -317,7 +344,33 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
             }
         }
 
-        // 0c. GitHub bare repo URL: github.com/<owner>/<repo> (no .git, no sub-path)
+        // 0c. GitLab bare .git URL: gitlab.<host>/<owner>[/subgroup]/<repo>.git
+        //     cap[1]=host, cap[2]=owner path (may include subgroups), cap[3]=repo
+        //     Combined with PKG_SOURCE_VERSION to decide commit vs tag.
+        for url in &source_urls {
+            if let Some(caps) = RE_GITLAB_GIT.captures(url) {
+                let host = caps[1].to_string();
+                let owner = caps[2].to_string();
+                let repo  = caps[3].to_string();
+                if let Some(ver) = &pkg_source_version {
+                    if RE_COMMIT_HASH.is_match(ver) {
+                        return SourceType::GitLab {
+                            host, owner, repo,
+                            tag_template: TagTemplate::Plain,
+                        };
+                    } else {
+                        let tag_template = detect_tag_template(ver, &pkg_version);
+                        return SourceType::GitLab { host, owner, repo, tag_template };
+                    }
+                }
+                return SourceType::GitLab {
+                    host, owner, repo,
+                    tag_template: TagTemplate::WithV,
+                };
+            }
+        }
+
+        // 0d. GitHub bare repo URL: github.com/<owner>/<repo> (no .git, no sub-path)
         //     Combined with PKG_SOURCE_VERSION to decide commit vs tag (same as .git case)
         for url in &source_urls {
             if let Some(caps) = RE_GITHUB_BARE.captures(url) {
@@ -1002,6 +1055,19 @@ fn detect_source_type(
         return SourceType::GoModule { module_path: caps[1].to_string() };
     }
 
+    // golang official release tarballs: go.dev/dl/ golang.google.cn/dl/
+    if RE_GOLANG_DL.is_match(url) {
+        return SourceType::GoLang;
+    }
+
+    // freedesktop.org tarballs: gstreamer.freedesktop.org/src/<name>
+    if let Some(caps) = RE_FREEDESKTOP.captures(url) {
+        let name = caps[1].to_string();
+        if !name.is_empty() {
+            return SourceType::Freedesktop { project: name };
+        }
+    }
+
     SourceType::Unknown
 }
 
@@ -1032,7 +1098,8 @@ static RE_CODELOAD: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static RE_GITHUB_ARCHIVE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https://github\.com/([^/]+)/([^/]+)/archive/(.+?)\.tar\.gz").unwrap()
+    // Matches /archive/<ref>.tar.gz AND /archive/<ref> (no extension, e.g. checksec)
+    Regex::new(r"https://github\.com/([^/]+)/([^/]+)/archive/([^/?]+?)(?:\.tar\.gz|\.zip|$)").unwrap()
 });
 
 // github.com/<owner>/<repo>/releases/download/<tag>/ (trailing slash, file appended separately)
@@ -1051,6 +1118,12 @@ static RE_COMMIT_HASH: LazyLock<Regex> = LazyLock::new(|| {
 
 static RE_GITLAB: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https://(gitlab\.[^/]+)/([^/]+)/([^/]+)/-/archive/([^/]+)/").unwrap()
+});
+
+// gitlab.<host>/path/to/<repo>.git  (bare git clone URL, any gitlab instance)
+// The host is captured; owner and repo are the last two path components.
+static RE_GITLAB_GIT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https://(gitlab\.[^/]+|gitlab\.com)/(.+)/([^/]+)\.git$").unwrap()
 });
 
 static RE_BITBUCKET: LazyLock<Regex> = LazyLock::new(|| {
@@ -1107,8 +1180,9 @@ static RE_CPAN: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 // Matches the cpan.org/authors/ directory URL (no package name embedded)
+// search.cpan.org uses /CPAN/authors/id/... path prefix
 static RE_CPAN_DIR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.cpan\.org|cpan\.metacpan\.org|search\.cpan\.org)/authors/").unwrap()
+    Regex::new(r"https?://(?:www\.cpan\.org|cpan\.metacpan\.org|search\.cpan\.org)/(?:CPAN/)?authors/").unwrap()
 });
 
 // github.com/<owner>/<repo>  — bare repo URL without .git suffix or any sub-path
@@ -1136,6 +1210,17 @@ static RE_MAVEN: LazyLock<Regex> = LazyLock::new(|| {
 static RE_GOMODULE: LazyLock<Regex> = LazyLock::new(|| {
     // https://proxy.golang.org/github.com/foo/bar/@v/v1.2.3.zip
     Regex::new(r"https?://proxy\.golang\.org/([^/@]+(?:/[^/@]+)+)/@").unwrap()
+});
+
+// go.dev/dl/ or golang.google.cn/dl/ or mirrors.*/golang/
+static RE_GOLANG_DL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https?://(?:go\.dev|golang\.google\.cn)/dl/").unwrap()
+});
+
+// freedesktop.org tarball downloads: gstreamer.freedesktop.org/src/<name>
+// Captures the last path segment as the project name.
+static RE_FREEDESKTOP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"https?://(?:[^/]+\.)?freedesktop\.org/(?:[^/?]+/)*([^/?]+)/?$").unwrap()
 });
 
 #[cfg(test)]
@@ -1758,6 +1843,122 @@ mod tests {
         assert!(matches!(st, SourceType::GitHubCommit { owner, repo, .. }
             if owner == "nxp-qoriq" && repo == "qoriq-fm-ucode"),
             "github.com bare URL + commit hash should be GitHubCommit");
+    }
+
+    // ── CPAN PKG_SOURCE extraction ─────────────────────────────────────────
+
+    #[test]
+    fn test_cpan_from_pkg_source() {
+        // perl-cgi: PKG_SOURCE:=CGI-$(PKG_VERSION).tar.gz, URL is cpan.org dir
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://www.cpan.org/authors/id/L/LE/LEEJO"),
+            ("PKG_SOURCE", "CGI-5.1.tar.gz"),
+            ("PKG_VERSION", "5.1"),
+        ]);
+        assert!(matches!(st, SourceType::Cpan { module } if module == "CGI"),
+            "PKG_SOURCE should yield module name CGI");
+    }
+
+    #[test]
+    fn test_cpan_from_pkg_source_v_prefix() {
+        // perl-ack: PKG_SOURCE:=ack-v$(PKG_VERSION).tar.gz
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://www.cpan.org/authors/id/P/PE/PETDANCE/"),
+            ("PKG_SOURCE", "ack-v3.7.0.tar.gz"),
+            ("PKG_VERSION", "3.7.0"),
+        ]);
+        assert!(matches!(st, SourceType::Cpan { module } if module == "ack"),
+            "PKG_SOURCE with v-prefix should yield module name ack");
+    }
+
+    #[test]
+    fn test_cpan_search_cpan_org() {
+        // perl-file-rsyncp: search.cpan.org/CPAN/authors/id/.../
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://search.cpan.org/CPAN/authors/id/C/CB/CBARRATT/"),
+            ("PKG_SOURCE", "File-RsyncP-0.70.tar.gz"),
+            ("PKG_VERSION", "0.70"),
+        ]);
+        assert!(matches!(st, SourceType::Cpan { module } if module == "File-RsyncP"),
+            "search.cpan.org/CPAN/authors/ should match RE_CPAN_DIR");
+    }
+
+    // ── GitLab bare .git URL ───────────────────────────────────────────────
+
+    #[test]
+    fn test_gitlab_bare_git_url_with_tag() {
+        // mox-pkcs11: https://gitlab.nic.cz/turris/mox-pkcs11.git, PKG_SOURCE_VERSION=v2.0
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://gitlab.nic.cz/turris/mox-pkcs11.git"),
+            ("PKG_SOURCE_VERSION", "v2.0"),
+            ("PKG_VERSION", "2.0"),
+        ]);
+        assert!(matches!(st, SourceType::GitLab { host, owner: _, repo, tag_template }
+            if host == "gitlab.nic.cz" && repo == "mox-pkcs11"
+            && matches!(tag_template, TagTemplate::WithV)),
+            "gitlab.<host>/*.git + v-prefixed version should be GitLab WithV");
+    }
+
+    #[test]
+    fn test_gitlab_com_bare_git_url() {
+        // vrx518: https://gitlab.com/prpl-foundation/intel/vrx518_aca_fw.git
+        let st = parse_fake(&[
+            ("PKG_SOURCE_URL", "https://gitlab.com/prpl-foundation/intel/vrx518_aca_fw.git"),
+            ("PKG_SOURCE_VERSION", "abc1234567890abcdef1234567890abcdef123456"),
+        ]);
+        // Should be GitLab (commit case uses Plain tag template as fallback)
+        assert!(matches!(st, SourceType::GitLab { host, repo, .. }
+            if host == "gitlab.com" && repo == "vrx518_aca_fw"),
+            "gitlab.com/group/subgroup/repo.git should be GitLab with correct repo name");
+    }
+
+    // ── GitHub /archive/VERSION (no extension) ────────────────────────────
+
+    #[test]
+    fn test_github_archive_no_extension() {
+        // checksec: https://github.com/slimm609/checksec.sh/archive/2.5.0
+        let st = detect_source_type(
+            "https://github.com/slimm609/checksec.sh/archive/2.5.0",
+            "2.5.0", "checksec", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GitHubRelease { owner, repo, tag_template }
+            if owner == "slimm609" && repo == "checksec.sh"
+            && matches!(tag_template, TagTemplate::Plain)),
+            "github.com/archive/<version> without extension should be GitHubRelease");
+    }
+
+    // ── golang go.dev/dl/ ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_golang_dl_url() {
+        let st = detect_source_type(
+            "https://go.dev/dl/",
+            "1.26.1", "golang1.26", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GoLang),
+            "go.dev/dl/ should be GoLang");
+    }
+
+    #[test]
+    fn test_golang_cn_dl_url() {
+        let st = detect_source_type(
+            "https://golang.google.cn/dl/",
+            "1.26.1", "golang1.26", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::GoLang),
+            "golang.google.cn/dl/ should be GoLang");
+    }
+
+    // ── freedesktop.org ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_freedesktop_gstreamer() {
+        let st = detect_source_type(
+            "https://gstreamer.freedesktop.org/src/gst-plugins-base",
+            "1.24.0", "gst1-plugins-base", &HashMap::new(),
+        );
+        assert!(matches!(st, SourceType::Freedesktop { project } if project == "gst-plugins-base"),
+            "freedesktop.org/src/<name> should capture last segment as project");
     }
 
     #[test]

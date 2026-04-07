@@ -242,6 +242,16 @@ impl UpstreamChecker {
                 self.check_gomodule(parsed, module_path).await,
             SourceType::UrlRegex { url, regex } =>
                 self.check_url_regex(parsed, url, regex).await,
+            SourceType::GoLang =>
+                Ok(self.unknown_info_with_url(
+                    parsed, "golang-dl",
+                    "https://go.dev/dl/",
+                )),
+            SourceType::Freedesktop { project } =>
+                Ok(self.unknown_info_with_url(
+                    parsed, "freedesktop",
+                    &format!("https://gitlab.freedesktop.org/{}/", project),
+                )),
             SourceType::NoSource =>
                 Ok(self.unknown_info(parsed, "no-source")),
             SourceType::OpenWrtMirror =>
