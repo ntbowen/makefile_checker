@@ -1528,6 +1528,43 @@ fn extract_version_from_sf_rss(body: &str, current: &str) -> Option<String> {
     versions.into_iter().next().filter(|v| v != current)
 }
 
+/// Canonicalize pre-release suffixes to semver-compatible form so that
+/// semver::Version::parse can compare them correctly.
+///
+/// Examples:
+///   "3.0.0_beta1"   -> "3.0.0-beta.1"
+///   "3.0.0-beta.1"  -> "3.0.0-beta.1"  (unchanged)
+///   "1.0.0_rc2"     -> "1.0.0-rc.2"
+///   "2.0.0_alpha"   -> "2.0.0-alpha.0"
+///   "1.0.0-dev"     -> "1.0.0-dev.0"
+///   "4.44nightly"   -> "4.44.0-nightly.0"
+fn canonicalize_prerelease(v: &str) -> String {
+    // Regex: optional separator (- _ .) then keyword then optional digits
+    use std::sync::LazyLock;
+    use regex::Regex;
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)[-_.]?(alpha|beta|rc|dev|pre|nightly|snapshot|preview|next)([-_.]*(\d+))?"
+        ).unwrap()
+    });
+
+    if let Some(cap) = RE.find(v) {
+        let base = &v[..cap.start()];
+        let inner = cap.as_str();
+
+        // Extract keyword and optional number from the matched suffix
+        let kw_cap = RE.captures(inner).unwrap();
+        let keyword = kw_cap.get(1).map_or("", |m| m.as_str()).to_lowercase();
+        let num: u64 = kw_cap.get(3)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+
+        format!("{}-{}.{}", base.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.'), keyword, num)
+    } else {
+        v.to_string()
+    }
+}
+
 /// Simple version comparison: returns true if `latest` is newer than `current`.
 pub fn compare_versions(current: &str, latest: &str) -> bool {
     let cv = normalize_version(current);
@@ -1541,19 +1578,39 @@ pub fn compare_versions(current: &str, latest: &str) -> bool {
 }
 
 fn normalize_version(v: &str) -> String {
-    let v = v.trim_start_matches('v');
-    let parts: Vec<&str> = v.split('.').collect();
-    match parts.len() {
+    // First canonicalize pre-release separators so semver can parse them
+    let v = canonicalize_prerelease(v.trim_start_matches('v'));
+    let v = v.as_str();
+
+    // Split numeric base from optional semver pre-release part (-keyword.N)
+    let (base, pre) = if let Some(pos) = v.find('-') {
+        (&v[..pos], Some(&v[pos..]))
+    } else {
+        (v, None)
+    };
+
+    let parts: Vec<&str> = base.split('.').collect();
+    let numeric_base = match parts.len() {
+        0 => "0.0.0".to_string(),
         1 => format!("{}.0.0", parts[0]),
         2 => format!("{}.{}.0", parts[0], parts[1]),
         _ => {
-            // Only keep first 3 numeric-ish segments to satisfy semver parser
-            let clean: Vec<&str> = parts[..3.min(parts.len())]
+            let clean: Vec<String> = parts[..3.min(parts.len())]
                 .iter()
-                .map(|p| p.trim_end_matches(|c: char| !c.is_ascii_digit()))
+                .map(|p| {
+                    let digits: String = p.chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    if digits.is_empty() { "0".to_string() } else { digits }
+                })
                 .collect();
             clean.join(".")
         }
+    };
+
+    match pre {
+        Some(p) => format!("{}{}", numeric_base, p),
+        None => numeric_base,
     }
 }
 
@@ -1762,5 +1819,86 @@ mod tests {
         // 1.2.4 > 1.2.3, should remain and be marked outdated
         assert_eq!(info.latest_version.as_deref(), Some("1.2.4"));
         assert_eq!(info.is_outdated, Some(true));
+    }
+
+    // ── canonicalize_prerelease ───────────────────────────────────────────
+
+    #[test]
+    fn test_canonicalize_openwrt_beta() {
+        // OpenWrt uses _beta to avoid - in version strings
+        assert_eq!(canonicalize_prerelease("3.0.0_beta1"), "3.0.0-beta.1");
+        assert_eq!(canonicalize_prerelease("3.0.0_beta"), "3.0.0-beta.0");
+    }
+
+    #[test]
+    fn test_canonicalize_npm_beta() {
+        // NPM uses -beta. notation
+        assert_eq!(canonicalize_prerelease("3.0.0-beta.1"), "3.0.0-beta.1");
+    }
+
+    #[test]
+    fn test_canonicalize_rc() {
+        assert_eq!(canonicalize_prerelease("1.0.0_rc2"), "1.0.0-rc.2");
+        assert_eq!(canonicalize_prerelease("1.0.0-rc1"), "1.0.0-rc.1");
+        assert_eq!(canonicalize_prerelease("1.0.0.rc3"), "1.0.0-rc.3");
+    }
+
+    #[test]
+    fn test_canonicalize_stable_unchanged() {
+        assert_eq!(canonicalize_prerelease("1.2.3"), "1.2.3");
+        assert_eq!(canonicalize_prerelease("3.0.0"), "3.0.0");
+        assert_eq!(canonicalize_prerelease("20240101"), "20240101");
+    }
+
+    // ── cross-format equivalence ─────────────────────────────────────────
+
+    #[test]
+    fn test_modclean_equivalence() {
+        // Core case: OpenWrt "3.0.0_beta1" == NPM "3.0.0-beta.1"
+        // compare_versions(current, latest) returns true only if latest > current
+        assert!(!compare_versions("3.0.0_beta1", "3.0.0-beta.1"),
+            "3.0.0_beta1 and 3.0.0-beta.1 should be equal (not outdated)");
+        assert!(!compare_versions("3.0.0-beta.1", "3.0.0_beta1"),
+            "reverse should also be equal");
+    }
+
+    #[test]
+    fn test_prerelease_older_than_stable() {
+        // beta < stable release
+        assert!(compare_versions("3.0.0-beta.1", "3.0.0"),
+            "stable 3.0.0 should be newer than beta");
+        assert!(compare_versions("3.0.0_beta1", "3.0.0"),
+            "stable 3.0.0 should be newer than OpenWrt beta format");
+    }
+
+    #[test]
+    fn test_prerelease_ordering() {
+        // alpha < beta < rc < stable
+        assert!(compare_versions("1.0.0-alpha.1", "1.0.0-beta.1"));
+        assert!(compare_versions("1.0.0-beta.1", "1.0.0-rc.1"));
+        assert!(compare_versions("1.0.0-rc.1", "1.0.0"));
+        // beta.1 < beta.2
+        assert!(compare_versions("1.0.0-beta.1", "1.0.0-beta.2"));
+    }
+
+    #[test]
+    fn test_rc_cross_format() {
+        // 2.0.0_rc2 (OpenWrt) == 2.0.0-rc.2 (upstream)
+        assert!(!compare_versions("2.0.0_rc2", "2.0.0-rc.2"));
+        assert!(!compare_versions("2.0.0-rc.2", "2.0.0_rc2"));
+    }
+
+    #[test]
+    fn test_apply_rule_modclean_scenario() {
+        // Simulates the actual node-modclean scenario:
+        // current = "3.0.0_beta1" (from OpenWrt PKG_VERSION after subst)
+        // latest  = "3.0.0-beta.1" (from NPM /latest)
+        // With include_prerelease=true, should NOT be outdated
+        let parsed = make_parsed("3.0.0_beta1");
+        let mut info = make_info("3.0.0_beta1", "3.0.0-beta.1");
+        let rule = PkgRule { include_prerelease: true, ..Default::default() };
+        apply_rule(&mut info, &rule, &parsed);
+        assert_eq!(info.latest_version.as_deref(), Some("3.0.0-beta.1"));
+        assert_eq!(info.is_outdated, Some(false), "should NOT be outdated");
     }
 }
