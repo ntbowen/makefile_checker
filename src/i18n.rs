@@ -232,31 +232,47 @@ pub const CFG_FETCH_HASH: T = T(
 );
 
 // Post-check: outdated packages action menu
+pub const OUTDATED_HEADER: T = T(
+    "─── Outdated packages ───",
+    "─── 有更新的包 ───",
+);
+pub const OUTDATED_SELECT_ALL_PROMPT: T = T(
+    "Select all outdated packages? (No = choose manually)",
+    "选择全部有更新的包？（否 = 手动勾选）",
+);
+pub const OUTDATED_SELECT_MANUAL_PROMPT: T = T(
+    "Select packages  [space = toggle, a = select all, enter = confirm]",
+    "勾选要操作的包  [空格切换, a 全选, 回车确认]",
+);
 pub const OUTDATED_ACTION_PROMPT: T = T(
-    "Choose action for outdated packages",
-    "选择对有更新包的操作",
+    "What to do with the selected packages?",
+    "对已选包执行什么操作？",
 );
 pub const OUTDATED_ACTION_HASH: T = T(
-    "Fetch upstream commit & hash (download tarballs)",
-    "获取上游 commit 和哈希（下载源码）",
+    "① Fetch upstream commit & SHA-256 only  (no file changes)",
+    "① 仅获取上游 commit 和 SHA-256  （不修改文件）",
 );
 pub const OUTDATED_ACTION_UPDATE: T = T(
-    "Update Makefile(s) (backup .bak first)",
-    "更新 Makefile（先备份为 .bak）",
+    "② Update Makefile only  (PKG_VERSION; skip hash if not yet fetched)",
+    "② 仅更新 Makefile  （只写 PKG_VERSION；未获取哈希则跳过 PKG_HASH）",
 );
 pub const OUTDATED_ACTION_BOTH: T = T(
-    "Fetch hash then update Makefile(s)",
-    "获取哈希后更新 Makefile",
+    "③ Fetch hash THEN update Makefile  (PKG_VERSION + PKG_HASH)",
+    "③ 先获取哈希再更新 Makefile  （同时写入 PKG_VERSION 和 PKG_HASH）",
 );
 pub const OUTDATED_ACTION_SKIP: T = T(
-    "Skip (do nothing)",
-    "跳过（不操作）",
+    "④ Skip — go back",
+    "④ 跳过，返回",
 );
 
 // Hash fetch progress
 pub const HASH_FETCH_TITLE: T = T(
-    "─── Fetching upstream hashes ───",
-    "─── 获取上游哈希 ───",
+    "─── Step 1 / 2 : Fetching upstream commit & SHA-256 ───",
+    "─── 第 1 步 / 共 2 步：获取上游 commit 和 SHA-256 ───",
+);
+pub const HASH_FETCH_TITLE_ONLY: T = T(
+    "─── Fetching upstream commit & SHA-256 ───",
+    "─── 获取上游 commit 和 SHA-256 ───",
 );
 pub const HASH_FETCH_NO_URL: T = T(
     "no source URL — skipped",
@@ -273,12 +289,16 @@ pub const COMMIT_FETCH_ERR: T = T("commit error:", "commit 获取失败:");
 
 // Makefile update
 pub const UPDATE_TITLE: T = T(
+    "─── Step 2 / 2 : Updating Makefiles ───",
+    "─── 第 2 步 / 共 2 步：更新 Makefile ───",
+);
+pub const UPDATE_TITLE_ONLY: T = T(
     "─── Updating Makefiles ───",
     "─── 更新 Makefile ───",
 );
-pub const UPDATE_SELECT_PROMPT: T = T(
-    "Select packages to update (space to toggle, enter to confirm)",
-    "选择要更新的包（空格切换，回车确认）",
+pub const UPDATE_CONFIRM: T = T(
+    "Proceed to update the selected Makefile(s)?",
+    "确认更新以上选中的 Makefile？",
 );
 pub const UPDATE_OK: T = T("updated, changed:", "已更新，修改字段:");
 pub const UPDATE_ERR: T = T("update error:", "更新失败:");

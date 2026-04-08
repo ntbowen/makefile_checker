@@ -545,147 +545,266 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
         .collect();
 
     if !outdated.is_empty() {
+        println!("\n  {}\n", OUTDATED_HEADER.get(lang).cyan().bold());
+
+        // Print the outdated list so the user knows what is available
+        for (i, r) in outdated.iter().enumerate() {
+            let info = &r.upstream;
+            let v = info.latest_version.as_deref().unwrap_or("?");
+            println!(
+                "  {:>3}.  {}  {}  →  {}",
+                i + 1,
+                format!("{:<35}", info.pkg_name).yellow().bold(),
+                info.current_version.red(),
+                v.green().bold(),
+            );
+        }
         println!();
-        let actions = &[
-            OUTDATED_ACTION_HASH.get(lang),
-            OUTDATED_ACTION_UPDATE.get(lang),
-            OUTDATED_ACTION_BOTH.get(lang),
-            OUTDATED_ACTION_SKIP.get(lang),
-        ];
-        let action_sel = Select::with_theme(&theme)
-            .with_prompt(OUTDATED_ACTION_PROMPT.get(lang))
-            .items(actions)
-            .default(3)
+
+        // Step 1: select all or pick manually
+        let select_all = Confirm::with_theme(&theme)
+            .with_prompt(OUTDATED_SELECT_ALL_PROMPT.get(lang))
+            .default(true)
             .interact()?;
 
-        if action_sel < 3 {
-            // Let user pick which packages to act on
+        let chosen_indices: Vec<usize> = if select_all {
+            (0..outdated.len()).collect()
+        } else {
             let names: Vec<String> = outdated.iter().map(|r| {
                 let v = r.upstream.latest_version.as_deref().unwrap_or("?");
-                format!("{} ({} → {})", r.upstream.pkg_name, r.upstream.current_version, v)
+                format!(
+                    "{:<35}  {} → {}",
+                    r.upstream.pkg_name, r.upstream.current_version, v
+                )
             }).collect();
-            let selections = MultiSelect::with_theme(&theme)
-                .with_prompt(UPDATE_SELECT_PROMPT.get(lang))
+            MultiSelect::with_theme(&theme)
+                .with_prompt(OUTDATED_SELECT_MANUAL_PROMPT.get(lang))
                 .items(&names)
+                .interact()?
+        };
+
+        if chosen_indices.is_empty() {
+            println!("  {}", OUTDATED_ACTION_SKIP.get(lang).dimmed());
+        } else {
+            let chosen: Vec<&&CheckResult> = chosen_indices.iter().map(|&i| &outdated[i]).collect();
+            println!(
+                "\n  {} {}",
+                chosen.len().to_string().cyan().bold(),
+                match lang { crate::i18n::Lang::Zh => "个包已选中", _ => "package(s) selected" },
+            );
+
+            // Step 2: choose action
+            println!();
+            let actions = &[
+                OUTDATED_ACTION_HASH.get(lang),
+                OUTDATED_ACTION_UPDATE.get(lang),
+                OUTDATED_ACTION_BOTH.get(lang),
+                OUTDATED_ACTION_SKIP.get(lang),
+            ];
+            let action_sel = Select::with_theme(&theme)
+                .with_prompt(OUTDATED_ACTION_PROMPT.get(lang))
+                .items(actions)
+                .default(2)   // default: fetch hash THEN update
                 .interact()?;
-            let chosen: Vec<&&CheckResult> = selections.iter().map(|&i| &outdated[i]).collect();
 
-            let do_hash   = action_sel == 0 || action_sel == 2;
-            let do_update = action_sel == 1 || action_sel == 2;
+            if action_sel == 3 {
+                // user chose Skip
+            } else {
+                let do_hash   = action_sel == 0 || action_sel == 2;
+                let do_update = action_sel == 1 || action_sel == 2;
 
-            // Collect mutable results to update upstream_commit / latest_hash_sha256
-            let mut enriched: Vec<(usize, String, String)> = Vec::new(); // (idx, commit, hash)
+                // (pkg_name → sha256) map populated during hash fetch
+                let mut hash_map: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
 
-            if do_hash {
-                println!("\n{}\n", HASH_FETCH_TITLE.get(lang).cyan().bold());
-                let dl_path = config.dl_path.as_deref();
+                // ── Step A: fetch commit + hash ──────────────────────────
+                if do_hash {
+                    let title = if do_update {
+                        HASH_FETCH_TITLE.get(lang)
+                    } else {
+                        HASH_FETCH_TITLE_ONLY.get(lang)
+                    };
+                    println!("\n  {}\n", title.cyan().bold());
+                    let dl_path = config.dl_path.as_deref();
 
-                for r in &chosen {
-                    let info = &r.upstream;
-                    let pkg = &info.pkg_name;
-                    let parsed = &r.parsed;
+                    for r in &chosen {
+                        let info   = &r.upstream;
+                        let pkg    = &info.pkg_name;
+                        let parsed = &r.parsed;
 
-                    // Fetch latest commit for commit-tracked packages
-                    if let Some(src_ver) = &parsed.pkg_source_version {
-                        if src_ver.len() >= 12 {
-                            // looks like a commit SHA
-                            let commit_result: Result<String> = async {
-                                // Infer GitHub owner/repo from source_url
-                                if let Some(url) = &parsed.source_url {
-                                    if let Some(caps) = regex::Regex::new(
-                                        r"github\.com[:/]([^/]+)/([^/.\s]+)"
-                                    ).ok().and_then(|re| re.captures(url)) {
-                                        let owner = caps.get(1).map_or("", |m| m.as_str());
-                                        let repo  = caps.get(2).map_or("", |m| m.as_str());
-                                        return checker.fetch_latest_github_commit(owner, repo).await;
+                        // Fetch latest commit for commit-tracked packages
+                        if let Some(src_ver) = &parsed.pkg_source_version {
+                            if src_ver.len() >= 12 {
+                                let commit_result: Result<String> = async {
+                                    if let Some(url) = &parsed.source_url {
+                                        let re_gh = regex::Regex::new(
+                                            r"github\.com[:/]([^/]+)/([^/.\s]+)"
+                                        ).unwrap();
+                                        if let Some(caps) = re_gh.captures(url) {
+                                            let owner = caps.get(1).map_or("", |m| m.as_str());
+                                            let repo  = caps.get(2).map_or("", |m| m.as_str());
+                                            return checker.fetch_latest_github_commit(owner, repo).await;
+                                        }
+                                        let re_gl = regex::Regex::new(
+                                            r"(gitlab\.[^/]+)/([^/]+)/([^/.\s]+)"
+                                        ).unwrap();
+                                        if let Some(caps) = re_gl.captures(url) {
+                                            let host  = caps.get(1).map_or("gitlab.com", |m| m.as_str());
+                                            let owner = caps.get(2).map_or("", |m| m.as_str());
+                                            let repo  = caps.get(3).map_or("", |m| m.as_str());
+                                            return checker.fetch_latest_gitlab_commit(host, owner, repo).await;
+                                        }
                                     }
-                                    if let Some(caps) = regex::Regex::new(
-                                        r"gitlab\.[^/]+/([^/]+)/([^/.\s]+)"
-                                    ).ok().and_then(|re| re.captures(url)) {
-                                        let host  = "gitlab.com";
-                                        let owner = caps.get(1).map_or("", |m| m.as_str());
-                                        let repo  = caps.get(2).map_or("", |m| m.as_str());
-                                        return checker.fetch_latest_gitlab_commit(host, owner, repo).await;
-                                    }
+                                    anyhow::bail!("cannot determine git host from source URL")
+                                }.await;
+                                match &commit_result {
+                                    Ok(c) => println!(
+                                        "  {}  {} {}",
+                                        format!("{:<35}", pkg).yellow().bold(),
+                                        COMMIT_FETCH_OK.get(lang),
+                                        c[..c.len().min(12)].cyan(),
+                                    ),
+                                    Err(e) => println!(
+                                        "  {}  {} {}",
+                                        format!("{:<35}", pkg).yellow(),
+                                        COMMIT_FETCH_ERR.get(lang).red(),
+                                        e.to_string().dimmed(),
+                                    ),
                                 }
-                                anyhow::bail!("cannot determine git host from URL")
-                            }.await;
-                            match commit_result {
-                                Ok(c) => println!("  {} {} {}", pkg.yellow().bold(), COMMIT_FETCH_OK.get(lang), &c[..c.len().min(12)].cyan()),
-                                Err(e) => println!("  {} {} {}", pkg.yellow(), COMMIT_FETCH_ERR.get(lang), e.to_string().red()),
                             }
                         }
-                    }
 
-                    // Download tarball and compute hash
-                    let url = match &parsed.source_url {
-                        Some(u) => u,
-                        None => { println!("  {} {}", pkg.yellow(), HASH_FETCH_NO_URL.get(lang).dimmed()); continue; }
-                    };
-                    let fname = match &parsed.source_file {
-                        Some(f) => f,
-                        None => { println!("  {} {}", pkg.yellow(), HASH_FETCH_NO_FILE.get(lang).dimmed()); continue; }
-                    };
+                        // Download tarball + compute SHA-256
+                        let url = match &parsed.source_url {
+                            Some(u) => u,
+                            None => {
+                                println!(
+                                    "  {}  {}",
+                                    format!("{:<35}", pkg).yellow(),
+                                    HASH_FETCH_NO_URL.get(lang).dimmed()
+                                );
+                                continue;
+                            }
+                        };
+                        let fname = match &parsed.source_file {
+                            Some(f) => f,
+                            None => {
+                                println!(
+                                    "  {}  {}",
+                                    format!("{:<35}", pkg).yellow(),
+                                    HASH_FETCH_NO_FILE.get(lang).dimmed()
+                                );
+                                continue;
+                            }
+                        };
+                        let new_version = match &info.latest_version {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        let new_fname = fname.replace(&parsed.pkg_version, new_version.as_str());
+                        let new_url   = url.replace(&parsed.pkg_version, new_version.as_str());
 
-                    // For outdated packages we need the NEW version filename
-                    // Build the new source filename by replacing current version with latest
-                    let new_version = match &info.latest_version {
-                        Some(v) => v,
-                        None => continue,
-                    };
-                    let new_fname = fname.replace(&parsed.pkg_version, new_version.as_str());
-                    let new_url   = url.replace(&parsed.pkg_version, new_version.as_str());
-
-                    match checker.download_and_hash(&new_url, &new_fname, dl_path).await {
-                        Ok(hash) => {
-                            println!("  {} {} {}", pkg.yellow().bold(), HASH_FETCH_OK.get(lang), hash.cyan());
-                            let result_idx = results.iter()
-                                .position(|r2| r2.upstream.pkg_name == *pkg)
-                                .unwrap_or(0);
-                            enriched.push((result_idx, String::new(), hash));
+                        match checker.download_and_hash(&new_url, &new_fname, dl_path).await {
+                            Ok(hash) => {
+                                println!(
+                                    "  {}  {} {}",
+                                    format!("{:<35}", pkg).yellow().bold(),
+                                    HASH_FETCH_OK.get(lang),
+                                    hash.cyan(),
+                                );
+                                hash_map.insert(pkg.to_string(), hash);
+                            }
+                            Err(e) => println!(
+                                "  {}  {} {}",
+                                format!("{:<35}", pkg).yellow(),
+                                HASH_FETCH_ERR.get(lang).red(),
+                                e.to_string().dimmed(),
+                            ),
                         }
-                        Err(e) => println!("  {} {} {}", pkg.yellow(), HASH_FETCH_ERR.get(lang), e.to_string().red()),
                     }
                 }
-            }
 
-            if do_update {
-                println!("\n{}\n", UPDATE_TITLE.get(lang).cyan().bold());
-                for r in &chosen {
-                    let info = &r.upstream;
-                    let pkg  = &info.pkg_name;
-                    let path = &r.parsed.path;
+                // ── Step B: update Makefiles ─────────────────────────────
+                if do_update {
+                    let title = if do_hash { UPDATE_TITLE.get(lang) } else { UPDATE_TITLE_ONLY.get(lang) };
+                    println!("\n  {}\n", title.cyan().bold());
 
-                    let new_version = match &info.latest_version {
-                        Some(v) => v.clone(),
-                        None => { println!("  {} {}", pkg.yellow(), UPDATE_NOTHING.get(lang).dimmed()); continue; }
-                    };
+                    // Preview what will be written
+                    for r in &chosen {
+                        let info = &r.upstream;
+                        let pkg  = &info.pkg_name;
+                        let new_version = info.latest_version.as_deref().unwrap_or("?");
+                        let new_hash = hash_map.get(pkg.as_str());
+                        let hash_preview = new_hash
+                            .map(|h| format!("  PKG_HASH → {}", &h[..h.len().min(16)]))
+                            .unwrap_or_else(|| "  PKG_HASH → (not fetched, unchanged)".dimmed().to_string());
+                        println!(
+                            "  {}  PKG_VERSION → {}  {}",
+                            format!("{:<35}", pkg).yellow().bold(),
+                            new_version.green().bold(),
+                            hash_preview.dimmed(),
+                        );
+                    }
+                    println!();
 
-                    // Find the hash we fetched for this package (if any)
-                    let new_hash = enriched.iter()
-                        .find(|(idx, _, _)| results.get(*idx).map_or(false, |r2| r2.upstream.pkg_name == *pkg))
-                        .map(|(_, _, h)| h.clone());
+                    // Confirm before writing
+                    let confirmed = Confirm::with_theme(&theme)
+                        .with_prompt(UPDATE_CONFIRM.get(lang))
+                        .default(true)
+                        .interact()?;
 
-                    let upd = MakefileUpdate {
-                        pkg_version: Some(new_version),
-                        pkg_source_version: None, // TODO: commit SHA if needed
-                        pkg_hash: new_hash,
-                    };
+                    if confirmed {
+                        println!();
+                        for r in &chosen {
+                            let info = &r.upstream;
+                            let pkg  = &info.pkg_name;
+                            let path = &r.parsed.path;
 
-                    match update_makefile(path, &upd) {
-                        Ok(changed) if !changed.is_empty() => {
-                            let bak = path.with_extension("bak");
-                            println!(
-                                "  {} {} {}  ({} {})",
-                                "✓".green(),
-                                pkg.yellow().bold(),
-                                UPDATE_OK.get(lang),
-                                changed.join(", ").cyan(),
-                                format!("{} {}", UPDATE_BAK.get(lang), bak.display()).dimmed(),
-                            );
+                            let new_version = match &info.latest_version {
+                                Some(v) => v.clone(),
+                                None => {
+                                    println!(
+                                        "  {}  {}",
+                                        format!("{:<35}", pkg).yellow(),
+                                        UPDATE_NOTHING.get(lang).dimmed()
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            let new_hash = hash_map.get(pkg.as_str()).cloned();
+
+                            let upd = MakefileUpdate {
+                                pkg_version: Some(new_version),
+                                pkg_source_version: None,
+                                pkg_hash: new_hash,
+                            };
+
+                            match update_makefile(path, &upd) {
+                                Ok(changed) if !changed.is_empty() => {
+                                    let bak = path.with_extension("bak");
+                                    println!(
+                                        "  {}  {}  {}  ({})",
+                                        "✓".green(),
+                                        format!("{:<35}", pkg).yellow().bold(),
+                                        format!("{} {}", UPDATE_OK.get(lang), changed.join(", ").cyan()),
+                                        format!("{} {}", UPDATE_BAK.get(lang), bak.display()).dimmed(),
+                                    );
+                                }
+                                Ok(_) => println!(
+                                    "  {}  {}  {}",
+                                    "–".dimmed(),
+                                    format!("{:<35}", pkg).yellow(),
+                                    UPDATE_NOTHING.get(lang).dimmed()
+                                ),
+                                Err(e) => println!(
+                                    "  {}  {}  {}",
+                                    "✗".red(),
+                                    format!("{:<35}", pkg).yellow(),
+                                    format!("{} {}", UPDATE_ERR.get(lang), e).red()
+                                ),
+                            }
                         }
-                        Ok(_) => println!("  {} {} {}", "–".dimmed(), pkg.yellow(), UPDATE_NOTHING.get(lang).dimmed()),
-                        Err(e) => println!("  {} {} {}", "✗".red(), pkg.yellow(), format!("{} {}", UPDATE_ERR.get(lang), e).red()),
                     }
                 }
             }
