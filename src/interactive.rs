@@ -616,6 +616,9 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                 // (pkg_name → sha256) map populated during hash fetch
                 let mut hash_map: std::collections::HashMap<String, String> =
                     std::collections::HashMap::new();
+                // (pkg_name → commit SHA) map populated during commit fetch
+                let mut commit_map: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
 
                 // ── Step A: fetch commit + hash ──────────────────────────
                 if do_hash {
@@ -658,12 +661,15 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                                     anyhow::bail!("cannot determine git host from source URL")
                                 }.await;
                                 match &commit_result {
-                                    Ok(c) => println!(
-                                        "  {}  {} {}",
-                                        format!("{:<35}", pkg).yellow().bold(),
-                                        COMMIT_FETCH_OK.get(lang),
-                                        c[..c.len().min(12)].cyan(),
-                                    ),
+                                    Ok(c) => {
+                                        commit_map.insert(pkg.clone(), c.clone());
+                                        println!(
+                                            "  {}  {} {}",
+                                            format!("{:<35}", pkg).yellow().bold(),
+                                            COMMIT_FETCH_OK.get(lang),
+                                            c[..c.len().min(12)].cyan(),
+                                        );
+                                    }
                                     Err(e) => println!(
                                         "  {}  {} {}",
                                         format!("{:<35}", pkg).yellow(),
@@ -805,6 +811,27 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                                 ),
                             }
                         }
+                    }
+                }
+
+                // ── Re-save report with fetched hash / commit data ────────
+                if config.output_format != OutputFormat::None && do_hash {
+                    let updated_results: Vec<CheckResult> = results.iter().map(|r| {
+                        let mut cloned = r.clone();
+                        if let Some(h) = hash_map.get(&cloned.upstream.pkg_name) {
+                            cloned.upstream.latest_hash_sha256 = Some(h.clone());
+                        }
+                        if let Some(c) = commit_map.get(&cloned.upstream.pkg_name) {
+                            cloned.upstream.upstream_commit = Some(c.clone());
+                        }
+                        cloned
+                    }).collect();
+
+                    let out_path = config.output_path.as_deref().unwrap_or(".");
+                    if let Err(e) = save_report(&updated_results, out_path, &config.output_format, lang) {
+                        eprintln!("  warn: could not re-save report with hash data: {}", e);
+                    } else {
+                        println!("  {} {}", "✓".green(), SNAP_SAVED.get(lang));
                     }
                 }
             }
