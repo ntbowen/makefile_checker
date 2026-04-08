@@ -619,6 +619,9 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                 // (pkg_name → commit SHA) map populated during commit fetch
                 let mut commit_map: std::collections::HashMap<String, String> =
                     std::collections::HashMap::new();
+                // (pkg_name → fetch error) map populated when hash/commit fetch fails
+                let mut fetch_error_map: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
 
                 // ── Step A: fetch commit + hash ──────────────────────────
                 if do_hash {
@@ -670,12 +673,15 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                                             c[..c.len().min(12)].cyan(),
                                         );
                                     }
-                                    Err(e) => println!(
-                                        "  {}  {} {}",
-                                        format!("{:<35}", pkg).yellow(),
-                                        COMMIT_FETCH_ERR.get(lang).red(),
-                                        e.to_string().dimmed(),
-                                    ),
+                                    Err(e) => {
+                                        fetch_error_map.insert(pkg.clone(), format!("commit: {}", e));
+                                        println!(
+                                            "  {}  {} {}",
+                                            format!("{:<35}", pkg).yellow(),
+                                            COMMIT_FETCH_ERR.get(lang).red(),
+                                            e.to_string().dimmed(),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -720,12 +726,15 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                                 );
                                 hash_map.insert(pkg.to_string(), hash);
                             }
-                            Err(e) => println!(
-                                "  {}  {} {}",
-                                format!("{:<35}", pkg).yellow(),
-                                HASH_FETCH_ERR.get(lang).red(),
-                                e.to_string().dimmed(),
-                            ),
+                            Err(e) => {
+                                fetch_error_map.insert(pkg.clone(), format!("hash: {}", e));
+                                println!(
+                                    "  {}  {} {}",
+                                    format!("{:<35}", pkg).yellow(),
+                                    HASH_FETCH_ERR.get(lang).red(),
+                                    e.to_string().dimmed(),
+                                );
+                            }
                         }
                     }
                 }
@@ -823,6 +832,9 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                         }
                         if let Some(c) = commit_map.get(&cloned.upstream.pkg_name) {
                             cloned.upstream.upstream_commit = Some(c.clone());
+                        }
+                        if let Some(e) = fetch_error_map.get(&cloned.upstream.pkg_name) {
+                            cloned.upstream.check_error = Some(e.clone());
                         }
                         cloned
                     }).collect();
