@@ -1060,7 +1060,7 @@ impl UpstreamChecker {
         let upstream_url = format!("https://metacpan.org/dist/{}", name);
 
         #[derive(Deserialize)]
-        struct CpanResp { version: String }
+        struct CpanResp { version: serde_json::Value }
 
         let resp: CpanResp = self
             .plain_client
@@ -1069,7 +1069,12 @@ impl UpstreamChecker {
             .error_for_status().context("cpan HTTP error")?
             .json().await.context("parse cpan JSON")?;
 
-        let version = resp.version.trim_start_matches('v').to_string();
+        let raw = match &resp.version {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            other => other.to_string(),
+        };
+        let version = raw.trim_start_matches('v').to_string();
         let is_outdated = compare_versions(&parsed.pkg_version, &version);
 
         Ok(UpstreamInfo {
