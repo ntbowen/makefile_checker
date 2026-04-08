@@ -220,3 +220,71 @@ pub const CFG_PRERELEASE_NOTE: T = T(
 // Misc
 pub const LANG_SELECT_PROMPT: &str = "Language / 语言";
 pub const SECONDS_SUFFIX: T = T("s", "秒");
+
+// Configure: dl_path and hash fetch
+pub const CFG_DL_PATH: T = T(
+    "Source download directory (e.g. /path/to/openwrt/dl, leave empty to disable save)",
+    "源码下载保存路径（如 /path/to/openwrt/dl，留空不保存）",
+);
+pub const CFG_FETCH_HASH: T = T(
+    "Fetch upstream tarball SHA-256 hash for outdated packages?",
+    "对有更新的包下载上游源码并计算 SHA-256？",
+);
+
+// Post-check: outdated packages action menu
+pub const OUTDATED_ACTION_PROMPT: T = T(
+    "Choose action for outdated packages",
+    "选择对有更新包的操作",
+);
+pub const OUTDATED_ACTION_HASH: T = T(
+    "Fetch upstream commit & hash (download tarballs)",
+    "获取上游 commit 和哈希（下载源码）",
+);
+pub const OUTDATED_ACTION_UPDATE: T = T(
+    "Update Makefile(s) (backup .bak first)",
+    "更新 Makefile（先备份为 .bak）",
+);
+pub const OUTDATED_ACTION_BOTH: T = T(
+    "Fetch hash then update Makefile(s)",
+    "获取哈希后更新 Makefile",
+);
+pub const OUTDATED_ACTION_SKIP: T = T(
+    "Skip (do nothing)",
+    "跳过（不操作）",
+);
+
+// Hash fetch progress
+pub const HASH_FETCH_TITLE: T = T(
+    "─── Fetching upstream hashes ───",
+    "─── 获取上游哈希 ───",
+);
+pub const HASH_FETCH_NO_URL: T = T(
+    "no source URL — skipped",
+    "无源码 URL，跳过",
+);
+pub const HASH_FETCH_NO_FILE: T = T(
+    "no source filename — skipped",
+    "无源码文件名，跳过",
+);
+pub const HASH_FETCH_OK: T = T("hash fetched:", "哈希获取成功:");
+pub const HASH_FETCH_ERR: T = T("hash error:", "哈希获取失败:");
+pub const COMMIT_FETCH_OK: T = T("latest commit:", "最新 commit:");
+pub const COMMIT_FETCH_ERR: T = T("commit error:", "commit 获取失败:");
+
+// Makefile update
+pub const UPDATE_TITLE: T = T(
+    "─── Updating Makefiles ───",
+    "─── 更新 Makefile ───",
+);
+pub const UPDATE_SELECT_PROMPT: T = T(
+    "Select packages to update (space to toggle, enter to confirm)",
+    "选择要更新的包（空格切换，回车确认）",
+);
+pub const UPDATE_OK: T = T("updated, changed:", "已更新，修改字段:");
+pub const UPDATE_ERR: T = T("update error:", "更新失败:");
+pub const UPDATE_BAK: T = T("backup written to", "备份已写入");
+pub const UPDATE_NOTHING: T = T("nothing to update (no new version/hash available)", "无可更新内容（缺少版本或哈希）");
+
+// Spreadsheet new columns
+pub const HDR_UPSTREAM_COMMIT: T = T("Upstream Commit", "上游 Commit");
+pub const HDR_UPSTREAM_HASH: T = T("Upstream SHA-256", "上游 SHA-256");

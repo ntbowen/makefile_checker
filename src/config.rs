@@ -62,6 +62,13 @@ pub struct Config {
     pub include_prerelease: bool,
     #[serde(default)]
     pub lang: Lang,
+    /// Directory to save downloaded source tarballs (e.g. OpenWrt dl/ folder).
+    /// If None, downloads are kept in a temp file and discarded after hash computation.
+    pub dl_path: Option<String>,
+    /// When true, for outdated packages the tool will offer to download the upstream
+    /// tarball and compute its SHA-256 hash for PKG_HASH update.
+    #[serde(default)]
+    pub fetch_upstream_hash: bool,
 }
 
 fn default_retry_times() -> u32 { 3 }
@@ -104,6 +111,8 @@ impl Default for Config {
             pkg_rules: HashMap::new(),
             include_prerelease: false,
             lang: Lang::En,
+            dl_path: None,
+            fetch_upstream_hash: false,
         }
     }
 }

@@ -1,6 +1,7 @@
 mod config;
 mod i18n;
 mod makefile_parser;
+mod makefile_updater;
 mod upstream;
 mod reporter;
 mod snapshot;

@@ -5,7 +5,7 @@ use comfy_table::{presets::UTF8_FULL, Attribute, Cell, CellAlignment, Color, Tab
 use std::path::Path;
 
 use crate::config::OutputFormat;
-use crate::i18n::{Lang, *};
+use crate::i18n::{Lang, HDR_UPSTREAM_COMMIT, HDR_UPSTREAM_HASH, *};
 use crate::makefile_parser::ParsedMakefile;
 use crate::upstream::UpstreamInfo;
 
@@ -263,6 +263,10 @@ fn row_data(r: &CheckResult, lang: Lang) -> Vec<String> {
             .as_deref()
             .unwrap_or("")
             .to_string(),
+        // Upstream commit (full SHA, populated after hash-fetch step)
+        info.upstream_commit.as_deref().unwrap_or("").to_string(),
+        // Upstream SHA-256 (populated after hash-fetch step)
+        info.latest_hash_sha256.as_deref().unwrap_or("").to_string(),
         info.upstream_url.as_deref().unwrap_or("").to_string(),
         info.check_error.as_deref().unwrap_or("").to_string(),
         r.parsed.path.to_string_lossy().to_string(),
@@ -280,6 +284,8 @@ fn headers(lang: Lang) -> Vec<&'static str> {
         HDR_BACKEND.get(lang),
         HDR_HASH_STATUS.get(lang),
         HDR_COMMIT_SHA.get(lang),
+        HDR_UPSTREAM_COMMIT.get(lang),
+        HDR_UPSTREAM_HASH.get(lang),
         HDR_UPSTREAM_URL.get(lang),
         HDR_NOTE.get(lang),
         HDR_PATH.get(lang),

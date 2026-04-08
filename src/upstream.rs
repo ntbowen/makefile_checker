@@ -13,7 +13,11 @@ pub struct UpstreamInfo {
     pub current_version: String,
     pub latest_version: Option<String>,
     pub latest_tag: Option<String>,
+    /// Commit SHA associated with the latest version tag
     pub latest_commit: Option<String>,
+    /// Latest commit on the default branch (for commit-tracked packages,
+    /// populated by the post-check hash-fetch step)
+    pub upstream_commit: Option<String>,
     pub latest_hash_sha256: Option<String>,
     pub is_outdated: Option<bool>,
     pub upstream_url: Option<String>,
@@ -150,6 +154,7 @@ impl UpstreamChecker {
                 latest_version: None,
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: None,
                 upstream_url: None,
@@ -414,6 +419,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: Some(tag),
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -457,6 +463,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit),
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url.to_string()),
@@ -517,6 +524,7 @@ impl UpstreamChecker {
                 latest_version: Some(latest_display),
                 latest_tag: None,
                 latest_commit: Some(latest.sha.clone()),
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -567,6 +575,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit_short),
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -623,6 +632,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit_short),
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -665,6 +675,7 @@ impl UpstreamChecker {
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -704,6 +715,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -746,6 +758,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -799,6 +812,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -848,6 +862,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -892,6 +907,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -953,6 +969,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -992,6 +1009,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -1035,6 +1053,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -1083,6 +1102,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -1125,6 +1145,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -1176,6 +1197,7 @@ impl UpstreamChecker {
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -1197,6 +1219,7 @@ impl UpstreamChecker {
             latest_version: None,
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: None,
             upstream_url: None,
@@ -1251,6 +1274,7 @@ impl UpstreamChecker {
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -1295,6 +1319,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url.to_string()),
@@ -1351,7 +1376,8 @@ impl UpstreamChecker {
                             latest_version: Some(version),
                             latest_tag: Some(tag.name.clone()),
                             latest_commit: None,
-                            latest_hash_sha256: None,
+                            upstream_commit: None,
+                latest_hash_sha256: None,
                             is_outdated: Some(is_outdated),
                             upstream_url: Some(repo_url.to_string()),
                             check_error: None,
@@ -1378,6 +1404,7 @@ impl UpstreamChecker {
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(repo_url.to_string()),
@@ -1430,6 +1457,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(upstream_url),
@@ -1470,6 +1498,7 @@ impl UpstreamChecker {
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(is_outdated),
             upstream_url: Some(upstream_url),
@@ -1514,6 +1543,7 @@ impl UpstreamChecker {
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
+                upstream_commit: None,
                 latest_hash_sha256: None,
                 is_outdated: Some(is_outdated),
                 upstream_url: Some(url.to_string()),
@@ -1551,6 +1581,99 @@ impl UpstreamChecker {
         let expected = expected_hash.trim().to_lowercase();
         let expected = expected.trim_start_matches("sha256:");
         Ok(digest != expected)
+    }
+
+    /// Download a source tarball from `url/fname`, compute its SHA-256, and
+    /// optionally save the file to `dl_path/<fname>` (skipping download if the
+    /// file already exists there).  Returns the hex-encoded SHA-256 digest.
+    pub async fn download_and_hash(
+        &self,
+        url: &str,
+        fname: &str,
+        dl_path: Option<&str>,
+    ) -> Result<String> {
+        use sha2::{Digest, Sha256};
+
+        let full_url = if url.ends_with('/') {
+            format!("{}{}", url, fname)
+        } else {
+            format!("{}/{}", url, fname)
+        };
+
+        // If dl_path is set and the file already exists, read from disk.
+        if let Some(dir) = dl_path {
+            let dest = std::path::Path::new(dir).join(fname);
+            if dest.exists() {
+                let bytes = std::fs::read(&dest)
+                    .with_context(|| format!("read cached tarball {}", dest.display()))?;
+                let mut hasher = Sha256::new();
+                hasher.update(&bytes);
+                return Ok(format!("{:x}", hasher.finalize()));
+            }
+        }
+
+        let bytes = self.plain_client
+            .get(&full_url)
+            .send().await.context("fetch upstream tarball")?
+            .error_for_status().context("upstream tarball HTTP error")?
+            .bytes().await.context("read tarball bytes")?;
+
+        // Save to dl_path if configured.
+        if let Some(dir) = dl_path {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("create dl dir {}", dir))?;
+            let dest = std::path::Path::new(dir).join(fname);
+            std::fs::write(&dest, &bytes)
+                .with_context(|| format!("write tarball to {}", dest.display()))?;
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    /// For commit-tracked packages (GitHubCommit source type), fetch the
+    /// latest commit SHA on the default branch of a GitHub repository.
+    pub async fn fetch_latest_github_commit(&self, owner: &str, repo: &str) -> Result<String> {
+        let api_url = format!(
+            "https://api.github.com/repos/{}/{}/commits?per_page=1",
+            owner, repo
+        );
+
+        #[derive(Deserialize)]
+        struct CommitItem { sha: String }
+
+        let commits: Vec<CommitItem> = self
+            .github_send(self.github_client.get(&api_url)).await?
+            .json().await.context("parse commits JSON")?;
+
+        commits.into_iter().next()
+            .map(|c| c.sha)
+            .ok_or_else(|| anyhow::anyhow!("no commits found"))
+    }
+
+    /// For commit-tracked packages (GitLab source type), fetch the latest
+    /// commit SHA on the default branch of a GitLab project.
+    pub async fn fetch_latest_gitlab_commit(&self, host: &str, owner: &str, repo: &str) -> Result<String> {
+        let project_path = format!("{}/{}", owner, repo);
+        let encoded = urlencoding::encode(&project_path);
+        let api_url = format!(
+            "https://{}/api/v4/projects/{}/repository/commits?per_page=1",
+            host, encoded
+        );
+
+        #[derive(Deserialize)]
+        struct CommitItem { id: String }
+
+        let commits: Vec<CommitItem> = self.plain_client
+            .get(&api_url)
+            .send().await.context("fetch gitlab commits")?
+            .error_for_status().context("gitlab commits HTTP error")?
+            .json().await.context("parse gitlab commits JSON")?;
+
+        commits.into_iter().next()
+            .map(|c| c.id)
+            .ok_or_else(|| anyhow::anyhow!("no commits found"))
     }
 }
 
@@ -1870,6 +1993,7 @@ mod tests {
             latest_version: Some(latest.to_string()),
             latest_tag: None,
             latest_commit: None,
+            upstream_commit: None,
             latest_hash_sha256: None,
             is_outdated: Some(compare_versions(current, latest)),
             upstream_url: None,
