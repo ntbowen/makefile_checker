@@ -463,19 +463,55 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
 
 impl ParsedMakefile {
     /// Returns the version that should be used for upstream comparison.
-    /// When PKG_SOURCE_VERSION (or PKG_SRC_VERSION) looks like a semver/dotted
-    /// version (not a 40-char commit hash), prefer it over PKG_VERSION because
-    /// some packages (e.g. lua-bit32) have a PKG_VERSION that is the "OpenWrt
-    /// meta-version" while the actual upstream version lives in PKG_SRC_VERSION.
+    ///
+    /// Rule: use PKG_VERSION unless pkg_source_version is a *plain* version
+    /// that differs from pkg_version (e.g. lua-bit32 uses PKG_SRC_VERSION=0.3
+    /// while PKG_VERSION is an OpenWrt meta-version 5.3.0).
+    ///
+    /// We deliberately do NOT return the raw pkg_source_version when it is a
+    /// decorated git tag like "hidapi-0.15.0", "rel-20200726", "v2.2.2",
+    /// "mc_release_10.39.0", etc. — those are tag strings, not version numbers.
+    /// For those cases the caller should use pkg_version directly and let the
+    /// tag-template machinery handle prefix/suffix stripping.
     pub fn effective_version(&self) -> &str {
         if let Some(sv) = &self.pkg_source_version {
             let sv = sv.trim();
-            // A git commit hash is 40 hex chars; if it looks like one, skip it
+            if sv.is_empty() { return &self.pkg_version; }
+
+            // Skip git commit hashes (hex strings 12-40 chars)
             let is_commit_hash = sv.len() >= 12
-                && sv.chars().all(|c| c.is_ascii_hexdigit())
-                && sv.len() <= 40;
-            if !is_commit_hash && !sv.is_empty() {
-                return sv;
+                && sv.len() <= 40
+                && sv.chars().all(|c| c.is_ascii_hexdigit());
+            if is_commit_hash { return &self.pkg_version; }
+
+            // Skip decorated tags: if after stripping a leading v/V the value
+            // equals pkg_version, it is just "v<version>" — already the same.
+            let sv_stripped = sv.trim_start_matches(|c| c == 'v' || c == 'V');
+            if sv_stripped == self.pkg_version.as_str() {
+                return &self.pkg_version;
+            }
+
+            // Skip any tag that contains a non-version prefix separator, i.e.
+            // the pkg_version appears INSIDE the string with a prefix or suffix
+            // (e.g. "hidapi-0.15.0", "rel-20200726", "mc_release_10.39.0",
+            //  "version_0.2.0", "lf-6.12.20-2.0.0", "release-0.1").
+            // Heuristic: if pkg_version is a substring and is not the whole
+            // stripped value, it is a decorated tag — skip it.
+            if sv_stripped != self.pkg_version.as_str()
+                && sv.contains(self.pkg_version.as_str())
+            {
+                return &self.pkg_version;
+            }
+
+            // A "plain" version different from pkg_version — use it.
+            // Typical case: lua-bit32 PKG_SRC_VERSION=0.3, PKG_VERSION=5.3.0
+            // Only accept if the value starts with a digit (after optional v).
+            if sv_stripped.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                // Also skip date-prefixed formats from PKG_SOURCE_VERSION that
+                // do not match pkg_version at all (these are exotic custom tags)
+                if !sv.contains('_') || sv_stripped == self.pkg_version.as_str() {
+                    return sv;
+                }
             }
         }
         &self.pkg_version

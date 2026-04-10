@@ -622,6 +622,24 @@ impl UpstreamChecker {
             version_cmp(&vb, &va)
         });
 
+        // Additional filter: drop tags whose extracted version has a wildly different
+        // major version from current (e.g. RELEASE-0_10_x when current is 1.26.x).
+        // We compare the first numeric component.
+        let current_major: u64 = parsed.effective_version()
+            .split(|c: char| !c.is_ascii_digit())
+            .find_map(|p| p.parse().ok())
+            .unwrap_or(0);
+        if current_major > 0 {
+            stable.retain(|t| {
+                let v = extract_version_from_tag(&t.name, tag_template);
+                let tag_major: u64 = v.split(|c: char| !c.is_ascii_digit())
+                    .find_map(|p| p.parse().ok())
+                    .unwrap_or(u64::MAX);
+                // Allow same major or adjacent major (±1 for major bumps)
+                tag_major != 0 && tag_major >= current_major.saturating_sub(1)
+            });
+        }
+
         if let Some(tag) = stable.first() {
             let version = extract_version_from_tag(&tag.name, tag_template);
             let is_outdated = compare_versions(parsed.effective_version(), &version);
@@ -1810,15 +1828,26 @@ fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
 
 fn extract_version_from_prefixed_tag(tag: &str, prefix: &str) -> String {
     if prefix.is_empty() {
-        return tag.trim_start_matches('v').to_string();
+        return tag.trim_start_matches(|c| c == 'v' || c == 'V').to_string();
     }
+    // Try with explicit separators first
     for sep in &['/', '-'] {
         let pref = format!("{}{}", prefix, sep);
         if tag.starts_with(&pref) {
-            return tag[pref.len()..].trim_start_matches('v').to_string();
+            return tag[pref.len()..].trim_start_matches(|c| c == 'v' || c == 'V').to_string();
         }
     }
-    tag.to_string()
+    // Try prefix directly concatenated with the version (e.g. prefix="V/", tag="V0.21.00")
+    let bare_prefix = prefix.trim_end_matches('/').trim_end_matches('-');
+    if !bare_prefix.is_empty() && tag.starts_with(bare_prefix) {
+        let rest = &tag[bare_prefix.len()..];
+        // Only accept if the next char is a digit (avoids partial matches)
+        if rest.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            return rest.to_string();
+        }
+    }
+    // Fall back: strip leading v/V
+    tag.trim_start_matches(|c| c == 'v' || c == 'V').to_string()
 }
 
 fn find_best_tag<'a>(
@@ -1830,9 +1859,10 @@ fn find_best_tag<'a>(
         .iter()
         .filter_map(|t| {
             let version = extract_version_from_tag(&t.name, template);
-            let v = version.trim_start_matches('v');
+            // Always return the v-stripped form as the canonical version string
+            let v = version.trim_start_matches(|c| c == 'v' || c == 'V').to_string();
             if v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                Some((*t, version))
+                Some((*t, v))
             } else {
                 None
             }
