@@ -1162,6 +1162,14 @@ fn detect_tag_template(ref_part: &str, pkg_version: &str) -> TagTemplate {
         let tmpl = ref_part.replace(&ver_underscored, "${VERSION}");
         return TagTemplate::Custom(tmpl);
     }
+    // Some packages use $(subst .,,$(PKG_VERSION)) — dots removed entirely, e.g.:
+    //   PKG_VERSION=2025.04.30  -> PKG_VERSION_REAL = 1.20250430  (prefix "1.", dots stripped)
+    // Detect: the dot-stripped form of pkg_version appears inside ref_part.
+    let ver_dotless = pkg_version.replace('.', "");
+    if ref_part.contains(&ver_dotless) && !ver_dotless.is_empty() {
+        let tmpl = ref_part.replace(&ver_dotless, "${VERSION_NODOT}");
+        return TagTemplate::Custom(tmpl);
+    }
     // Generic custom template: e.g. "release-1.2.3" or "liburing-2.14" or "app/v1.2.3"
     TagTemplate::Custom(ref_part.replace(pkg_version, "${VERSION}"))
 }
@@ -2248,6 +2256,24 @@ mod tests {
         assert!(matches!(st, SourceType::GitHubRelease { owner, repo, .. }
             if owner == "nxp-qoriq" && repo == "rcw"),
             "github.com bare URL + tag string should be GitHubRelease");
+    }
+
+    #[test]
+    fn test_bcm27xx_gpu_fw_nodot_version() {
+        // bcm27xx-gpu-fw: PKG_VERSION=2025.04.30
+        // PKG_VERSION_REAL = 1.$(subst .,,$(PKG_VERSION)) = 1.20250430
+        // PKG_SOURCE_URL = https://github.com/raspberrypi/firmware/releases/download/1.20250430
+        // Expected: GitHubRelease with Custom("1.${VERSION_NODOT}") template
+        let st = detect_source_type(
+            "https://github.com/raspberrypi/firmware/releases/download/1.20250430",
+            "2025.04.30", "bcm27xx-gpu-fw", &HashMap::new(),
+        );
+        assert!(
+            matches!(&st, SourceType::GitHubRelease { owner, repo, tag_template }
+                if owner == "raspberrypi" && repo == "firmware"
+                && matches!(tag_template, TagTemplate::Custom(p) if p.contains("${VERSION_NODOT}"))),
+            "bcm27xx-gpu-fw nodot URL should produce Custom(VERSION_NODOT) template, got {:?}", st
+        );
     }
 
 }

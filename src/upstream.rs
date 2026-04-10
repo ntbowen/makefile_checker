@@ -1816,6 +1816,30 @@ fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
         TagTemplate::WithV => tag.trim_start_matches('v').to_string(),
         TagTemplate::Plain => tag.to_string(),
         TagTemplate::Custom(pattern) => {
+            // Handle VERSION_NODOT: dots were stripped from version (subst .,,)
+            // e.g. pattern "1.${VERSION_NODOT}", tag "1.20260408" -> "2026.04.08"
+            if pattern.contains("${VERSION_NODOT}") {
+                let before_var = pattern.split("${VERSION_NODOT}").next().unwrap_or("");
+                let after_var = pattern.split("${VERSION_NODOT}").nth(1).unwrap_or("");
+                let mut v = tag.to_string();
+                if !before_var.is_empty() && v.starts_with(before_var) {
+                    v = v[before_var.len()..].to_string();
+                }
+                if !after_var.is_empty() && v.ends_with(after_var) {
+                    v = v[..v.len() - after_var.len()].to_string();
+                }
+                // v is now the nodot digits e.g. "20260408".
+                // Re-insert dots: YYYYMMDD -> YYYY.MM.DD, YYYYMM -> YYYY.MM
+                let digits: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
+                return if digits.len() == 8 {
+                    format!("{}.{}.{}", &digits[..4], &digits[4..6], &digits[6..8])
+                } else if digits.len() == 6 {
+                    format!("{}.{}", &digits[..4], &digits[4..6])
+                } else {
+                    v
+                };
+            }
+
             let before_var = pattern.split("${VERSION}").next().unwrap_or("");
             let after_var = pattern.split("${VERSION}").nth(1).unwrap_or("");
             let mut v = tag.to_string();
