@@ -508,14 +508,25 @@ impl UpstreamChecker {
             // latest_version: "YYYY-MM-DD (短hash)"
             let latest_display = format!("{} ({})", commit_date, latest_short);
 
-            // current_version: prefer PKG_SOURCE_DATE for date-aligned display so both
-            // columns share the same "YYYY-MM-DD (hash)" format and are directly comparable.
-            // Normalize dot-separated dates (2019.02.11) to dashes (2019-02-11).
+            // current_version: unified to "YYYY-MM-DD (short_hash)" format so it is
+            // directly comparable to latest_display.
+            // Priority: PKG_SOURCE_DATE  >  date-shaped PKG_VERSION  >  short commit hash only
+            static RE_DATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+                regex::Regex::new(r"^\d{4}[.\-]\d{2}[.\-]\d{2}$").unwrap()
+            });
             let current_display = if let Some(date) = &parsed.pkg_source_date {
+                // PKG_SOURCE_DATE present: normalize dots to dashes
                 let normalized = date.replace('.', "-");
                 format!("{} ({})", normalized, current_short)
+            } else if RE_DATE.is_match(parsed.pkg_version.trim()) {
+                // PKG_VERSION itself is a date (e.g. 2025.03.14)
+                let normalized = parsed.pkg_version.replace('.', "-");
+                format!("{} ({})", normalized, current_short)
             } else {
-                format!("{} ({})", parsed.pkg_version, current_short)
+                // PKG_VERSION is a semver/custom string — not comparable to a commit
+                // date, so just show the short hash for the current slot so the two
+                // columns share the same "(hash)" unit and the reader can compare them.
+                format!("({})", current_short)
             };
 
             return Ok(UpstreamInfo {
@@ -1931,6 +1942,27 @@ fn canonicalize_prerelease(v: &str) -> String {
 
 /// Simple version comparison: returns true if `latest` is newer than `current`.
 pub fn compare_versions(current: &str, latest: &str) -> bool {
+    // Guard: if the two version strings belong to completely different numbering
+    // schemes (e.g. current="6.12.20.2.0.0" vs latest="2022.01" — a vendor LTS
+    // branch vs upstream calendar versioning), numeric comparison produces
+    // nonsensical results.  Detect this by comparing the magnitude of the first
+    // numeric segment: if they differ by more than 4× we consider them
+    // incomparable and return false (treat as "up-to-date / unknown").
+    fn first_numeric(s: &str) -> Option<u64> {
+        s.trim_start_matches(|c: char| !c.is_ascii_digit())
+            .split(|c: char| !c.is_ascii_digit())
+            .find_map(|p| if p.is_empty() { None } else { p.parse().ok() })
+    }
+    if let (Some(c0), Some(l0)) = (first_numeric(current), first_numeric(latest)) {
+        // If both values are > 0 and one is > 4× the other, skip comparison
+        if c0 > 0 && l0 > 0 {
+            let ratio = if c0 > l0 { c0 / l0 } else { l0 / c0 };
+            if ratio > 4 {
+                return false;
+            }
+        }
+    }
+
     let cv = normalize_version(current);
     let lv = normalize_version(latest);
 
