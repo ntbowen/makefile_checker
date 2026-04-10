@@ -150,7 +150,7 @@ impl UpstreamChecker {
             Ok(info) => info,
             Err(e) => UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: None,
                 latest_tag: None,
                 latest_commit: None,
@@ -412,10 +412,10 @@ impl UpstreamChecker {
         if let Some(rel) = latest {
             let tag = rel.tag_name.clone();
             let version = extract_version_from_tag(&tag, tag_template);
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: Some(tag),
                 latest_commit: None,
@@ -456,10 +456,10 @@ impl UpstreamChecker {
 
         if let Some((tag, version)) = best {
             let commit = tag.commit.sha[..tag.commit.sha.len().min(8)].to_string();
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit),
@@ -567,11 +567,11 @@ impl UpstreamChecker {
 
         if let Some(tag) = matching.first() {
             let version = extract_version_from_prefixed_tag(&tag.name, prefix);
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             let commit_short = tag.commit.sha[..tag.commit.sha.len().min(8)].to_string();
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit_short),
@@ -624,11 +624,11 @@ impl UpstreamChecker {
 
         if let Some(tag) = stable.first() {
             let version = extract_version_from_tag(&tag.name, tag_template);
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             let commit_short = tag.commit.id[..tag.commit.id.len().min(8)].to_string();
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit_short),
@@ -668,10 +668,10 @@ impl UpstreamChecker {
         let version = extract_version_from_sf_rss(&body, &parsed.pkg_version);
 
         if let Some(v) = version {
-            let is_outdated = compare_versions(&parsed.pkg_version, &v);
+            let is_outdated = compare_versions(parsed.effective_version(), &v);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
@@ -707,11 +707,11 @@ impl UpstreamChecker {
             .json().await.context("parse pypi JSON")?;
 
         let version = resp.info.version;
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -751,10 +751,10 @@ impl UpstreamChecker {
 
         if let Some(pkg) = newest {
             let version = pkg.version.clone();
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
@@ -805,10 +805,10 @@ impl UpstreamChecker {
 
         if let Some(tag) = stable.first() {
             let version = extract_version_from_tag(&tag.name, tag_template);
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: None,
@@ -855,10 +855,10 @@ impl UpstreamChecker {
 
         if let Some(tag) = stable.first() {
             let version = extract_version_from_tag(&tag.name, tag_template);
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: None,
@@ -899,11 +899,11 @@ impl UpstreamChecker {
             .json().await.context("parse crates.io JSON")?;
 
         let version = resp.krate.newest_version;
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -961,11 +961,11 @@ impl UpstreamChecker {
             .json().await.context("parse npm JSON")?;
 
         let version = resp.version;
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -1001,11 +1001,11 @@ impl UpstreamChecker {
             .json().await.context("parse rubygems JSON")?;
 
         let version = resp.version;
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -1046,10 +1046,10 @@ impl UpstreamChecker {
         versions.sort_by(|a, b| version_cmp(b, a));
 
         if let Some(version) = versions.into_iter().next() {
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
@@ -1094,11 +1094,11 @@ impl UpstreamChecker {
             other => other.to_string(),
         };
         let version = raw.trim_start_matches('v').to_string();
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -1137,11 +1137,11 @@ impl UpstreamChecker {
             return Err(anyhow::anyhow!("pecl returned empty version for {}", name));
         }
 
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -1190,10 +1190,10 @@ impl UpstreamChecker {
             .find_map(|p| p.latest_version.clone().or_else(|| p.version.clone()));
 
         if let Some(v) = version {
-            let is_outdated = compare_versions(&parsed.pkg_version, &v);
+            let is_outdated = compare_versions(parsed.effective_version(), &v);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
@@ -1215,7 +1215,7 @@ impl UpstreamChecker {
     fn unknown_info(&self, parsed: &ParsedMakefile, reason: &str) -> UpstreamInfo {
         UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: None,
             latest_tag: None,
             latest_commit: None,
@@ -1267,10 +1267,10 @@ impl UpstreamChecker {
         let version = extract_version_from_html_index(&body, &parsed.pkg_version);
 
         if let Some(v) = version {
-            let is_outdated = compare_versions(&parsed.pkg_version, &v);
+            let is_outdated = compare_versions(parsed.effective_version(), &v);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
@@ -1312,10 +1312,10 @@ impl UpstreamChecker {
 
         if let Some(rel) = stable {
             let version = rel.version.trim_start_matches('v').to_string();
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
@@ -1369,10 +1369,10 @@ impl UpstreamChecker {
                     versions.sort_by(|a, b| version_cmp(&b.1, &a.1));
 
                     if let Some((tag, version)) = versions.into_iter().next() {
-                        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+                        let is_outdated = compare_versions(parsed.effective_version(), &version);
                         return Ok(UpstreamInfo {
                             pkg_name: parsed.pkg_name.clone(),
-                            current_version: parsed.pkg_version.clone(),
+                            current_version: parsed.effective_version().to_string(),
                             latest_version: Some(version),
                             latest_tag: Some(tag.name.clone()),
                             latest_commit: None,
@@ -1397,10 +1397,10 @@ impl UpstreamChecker {
 
         let version = extract_version_from_html_index(&body, &parsed.pkg_version);
         if let Some(v) = version {
-            let is_outdated = compare_versions(&parsed.pkg_version, &v);
+            let is_outdated = compare_versions(parsed.effective_version(), &v);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(v),
                 latest_tag: None,
                 latest_commit: None,
@@ -1450,10 +1450,10 @@ impl UpstreamChecker {
 
         if let Some(doc) = resp.response.docs.first() {
             let version = doc.latest_version.clone();
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
@@ -1490,11 +1490,11 @@ impl UpstreamChecker {
             .json().await.context("parse go module JSON")?;
 
         let version = resp.version.trim_start_matches('v').to_string();
-        let is_outdated = compare_versions(&parsed.pkg_version, &version);
+        let is_outdated = compare_versions(parsed.effective_version(), &version);
 
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
-            current_version: parsed.pkg_version.clone(),
+            current_version: parsed.effective_version().to_string(),
             latest_version: Some(version),
             latest_tag: None,
             latest_commit: None,
@@ -1536,10 +1536,10 @@ impl UpstreamChecker {
         versions.dedup();
 
         if let Some(version) = versions.into_iter().next() {
-            let is_outdated = compare_versions(&parsed.pkg_version, &version);
+            let is_outdated = compare_versions(parsed.effective_version(), &version);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
-                current_version: parsed.pkg_version.clone(),
+                current_version: parsed.effective_version().to_string(),
                 latest_version: Some(version),
                 latest_tag: None,
                 latest_commit: None,
@@ -1743,7 +1743,7 @@ fn apply_rule(info: &mut UpstreamInfo, rule: &PkgRule, parsed: &ParsedMakefile) 
 
     // Write back transformed version and re-evaluate is_outdated
     info.latest_version = Some(version.clone());
-    info.is_outdated = Some(compare_versions(&parsed.pkg_version, &version));
+    info.is_outdated = Some(compare_versions(parsed.effective_version(), &version));
 }
 
 /// Extract the newest stable version from a kernel.org HTML directory listing.
@@ -1796,7 +1796,14 @@ fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
             if !after_var.is_empty() && v.ends_with(after_var) {
                 v = v[..v.len() - after_var.len()].to_string();
             }
-            v.trim_start_matches('v').to_string()
+            // If extracted version still uses underscores as separators (e.g. from
+            // subst .,_,$(PKG_VERSION) patterns like curl-8_19_0 -> 8_19_0), convert back
+            let v = v.trim_start_matches('v');
+            if v.contains('_') && !v.contains('.') {
+                v.replace('_', ".")
+            } else {
+                v.to_string()
+            }
         }
     }
 }
@@ -1907,7 +1914,21 @@ pub fn compare_versions(current: &str, latest: &str) -> bool {
 fn normalize_version(v: &str) -> String {
     // First canonicalize pre-release separators so semver can parse them
     let v = canonicalize_prerelease(v.trim_start_matches('v'));
-    let v = v.as_str();
+    // Replace underscore-separated version numbers (e.g. 8_9_0 -> 8.9.0, curl_8_19_0 -> curl.8.19.0)
+    // Only do this when the string looks like a version (digits separated by underscores)
+    let v = if v.contains('_') && !v.contains('.') {
+        // e.g. "8_9_0" or "CRYPTOPP_8_9_0" — replace underscores between digits with dots
+        // Strip leading non-digit prefix (like "CRYPTOPP_" or "R_") then replace _ with .
+        let stripped = v.trim_start_matches(|c: char| !c.is_ascii_digit());
+        if !stripped.is_empty() {
+            std::borrow::Cow::Owned(stripped.replace('_', "."))
+        } else {
+            std::borrow::Cow::Borrowed(v.as_str())
+        }
+    } else {
+        std::borrow::Cow::Borrowed(v.as_str())
+    };
+    let v = v.as_ref();
 
     // Split numeric base from optional semver pre-release part (-keyword.N)
     let (base, pre) = if let Some(pos) = v.find('-') {

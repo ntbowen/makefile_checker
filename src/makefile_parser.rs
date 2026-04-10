@@ -461,6 +461,27 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
     }))
 }
 
+impl ParsedMakefile {
+    /// Returns the version that should be used for upstream comparison.
+    /// When PKG_SOURCE_VERSION (or PKG_SRC_VERSION) looks like a semver/dotted
+    /// version (not a 40-char commit hash), prefer it over PKG_VERSION because
+    /// some packages (e.g. lua-bit32) have a PKG_VERSION that is the "OpenWrt
+    /// meta-version" while the actual upstream version lives in PKG_SRC_VERSION.
+    pub fn effective_version(&self) -> &str {
+        if let Some(sv) = &self.pkg_source_version {
+            let sv = sv.trim();
+            // A git commit hash is 40 hex chars; if it looks like one, skip it
+            let is_commit_hash = sv.len() >= 12
+                && sv.chars().all(|c| c.is_ascii_hexdigit())
+                && sv.len() <= 40;
+            if !is_commit_hash && !sv.is_empty() {
+                return sv;
+            }
+        }
+        &self.pkg_version
+    }
+}
+
 /// Fully expand a Make expression: variable refs + built-in function calls.
 /// Supports up to 10 recursive passes; unknown $(shell ...) expressions are
 /// left unexpanded (returned as-is) rather than causing a panic.
@@ -1088,13 +1109,25 @@ fn detect_source_type(
 
 fn detect_tag_template(ref_part: &str, pkg_version: &str) -> TagTemplate {
     if ref_part == format!("v{}", pkg_version) {
-        TagTemplate::WithV
-    } else if ref_part == pkg_version {
-        TagTemplate::Plain
-    } else {
-        // Custom: e.g. "release-1.2.3" or "liburing-2.14" or "app/v1.2.3"
-        TagTemplate::Custom(ref_part.replace(pkg_version, "${VERSION}"))
+        return TagTemplate::WithV;
     }
+    if ref_part == pkg_version {
+        return TagTemplate::Plain;
+    }
+    // Some packages use $(subst .,_,$(PKG_VERSION)) in their tag, e.g.:
+    //   PKG_VERSION=2.7.4  -> tag ref R_2_7_4  (prefix "R_", dots->underscores)
+    //   PKG_VERSION=8.9.0  -> tag ref CRYPTOPP_8_9_0
+    //   PKG_VERSION=8.19.0 -> tag ref curl-8_19_0
+    // Detect this by checking if the underscore-form of pkg_version appears in ref_part.
+    let ver_underscored = pkg_version.replace('.', "_");
+    if ref_part.contains(&ver_underscored) {
+        // Build template by replacing the underscore form with a placeholder that
+        // extract_version_from_tag will later convert back (via _ -> . normalisation).
+        let tmpl = ref_part.replace(&ver_underscored, "${VERSION}");
+        return TagTemplate::Custom(tmpl);
+    }
+    // Generic custom template: e.g. "release-1.2.3" or "liburing-2.14" or "app/v1.2.3"
+    TagTemplate::Custom(ref_part.replace(pkg_version, "${VERSION}"))
 }
 
 // ──────────────────────────── compiled regexes ────────────────────────────
