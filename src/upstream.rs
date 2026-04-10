@@ -523,10 +523,10 @@ impl UpstreamChecker {
                 let normalized = parsed.pkg_version.replace('.', "-");
                 format!("{} ({})", normalized, current_short)
             } else {
-                // PKG_VERSION is a semver/custom string — not comparable to a commit
-                // date, so just show the short hash for the current slot so the two
-                // columns share the same "(hash)" unit and the reader can compare them.
-                format!("({})", current_short)
+                // PKG_VERSION is a semver/custom string — keep it for reference but
+                // also append the short hash so the two columns share the "(hash)"
+                // unit and the reader can compare them directly.
+                format!("{} ({})", parsed.pkg_version, current_short)
             };
 
             return Ok(UpstreamInfo {
