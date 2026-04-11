@@ -2192,10 +2192,24 @@ fn tag_write_fields(
     }
 }
 
+/// If a version string extracted from a tag doesn't start with a digit,
+/// try to strip a leading non-numeric prefix by finding the first digit.
+/// e.g. ".resctroot-1.6.13" -> "1.6.13", "release-2.0" -> "2.0"
+fn strip_tag_prefix(s: &str) -> String {
+    if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        return s.to_string();
+    }
+    if let Some(pos) = s.find(|c: char| c.is_ascii_digit()) {
+        s[pos..].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
     match template {
-        TagTemplate::WithV => tag.trim_start_matches('v').to_string(),
-        TagTemplate::Plain => tag.to_string(),
+        TagTemplate::WithV => strip_tag_prefix(tag.trim_start_matches('v')),
+        TagTemplate::Plain => strip_tag_prefix(tag),
         TagTemplate::Custom(pattern) => {
             // Handle VERSION_NODOT: dots were stripped from version (subst .,,)
             // e.g. pattern "1.${VERSION_NODOT}", tag "1.20260408" -> "2026.04.08"
