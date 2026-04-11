@@ -171,6 +171,21 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
         logical_line.clear();
     }
 
+    // Inject defaults from well-known OpenWrt include files.
+    // The parser does not expand `include` directives, so variables defined
+    // only in included .mk files are missing.  We detect the include by
+    // scanning the raw content and insert the known defaults as ?= (only if
+    // the key is not already set by the Makefile itself).
+    if content.contains("$(INCLUDE_DIR)/u-boot.mk") || content.contains("include/u-boot.mk") {
+        // From include/u-boot.mk:
+        //   PKG_SOURCE = $(PKG_NAME)-$(PKG_VERSION).tar.bz2
+        //   PKG_SOURCE_URL = https://ftp.denx.de/pub/u-boot
+        vars.entry("PKG_SOURCE_URL".to_string())
+            .or_insert_with(|| "https://ftp.denx.de/pub/u-boot".to_string());
+        vars.entry("PKG_SOURCE".to_string())
+            .or_insert_with(|| "$(PKG_NAME)-$(PKG_VERSION).tar.bz2".to_string());
+    }
+
     // Must have PKG_NAME (expand in case it references other vars)
     let pkg_name_raw = vars.get("PKG_NAME").cloned().unwrap_or_default();
     let pkg_name = expand_vars(&pkg_name_raw, &vars);
@@ -1138,6 +1153,14 @@ fn detect_source_type(
     if let Some(caps) = RE_GOOGLESOURCE.captures(url) {
         let repo_url = caps[1].to_string();
         return SourceType::GoogleSource { repo_url };
+    }
+
+    // ftp.denx.de/pub/u-boot: directory index with links like u-boot-2026.04.tar.bz2
+    if url.contains("denx.de") && url.contains("u-boot") {
+        return SourceType::UrlRegex {
+            url: "https://ftp.denx.de/pub/u-boot/".to_string(),
+            regex: r"u-boot-(\d{4}\.\d{2}(?:\.\d+)?)\.tar".to_string(),
+        };
     }
 
     SourceType::Unknown

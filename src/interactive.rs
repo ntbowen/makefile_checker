@@ -686,29 +686,6 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                             }
                         }
 
-                        // Download tarball + compute SHA-256
-                        let url = match &parsed.source_url {
-                            Some(u) => u,
-                            None => {
-                                println!(
-                                    "  {}  {}",
-                                    format!("{:<35}", pkg).yellow(),
-                                    HASH_FETCH_NO_URL.get(lang).dimmed()
-                                );
-                                continue;
-                            }
-                        };
-                        let fname = match &parsed.source_file {
-                            Some(f) => f,
-                            None => {
-                                println!(
-                                    "  {}  {}",
-                                    format!("{:<35}", pkg).yellow(),
-                                    HASH_FETCH_NO_FILE.get(lang).dimmed()
-                                );
-                                continue;
-                            }
-                        };
                         // For hash fetch we need a plain version to substitute into
                         // the URL/filename.  Use write_pkg_version (the safe Makefile
                         // value) — commit-tracked packages have no tarball URL to fetch.
@@ -719,6 +696,45 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                                 continue;
                             }
                         };
+
+                        // Download tarball + compute SHA-256
+                        //
+                        // source_url / source_file may be None when the URL is defined
+                        // in an included .mk file (e.g. include/u-boot.mk) that the
+                        // parser cannot expand.  Fall back to upstream_url as the
+                        // download directory, and infer the filename from PKG_NAME +
+                        // PKG_VERSION (the standard OpenWrt convention).
+                        let url: &str = match parsed.source_url.as_deref() {
+                            Some(u) => u,
+                            None => match info.upstream_url.as_deref() {
+                                Some(u) => u,
+                                None => {
+                                    println!(
+                                        "  {}  {}",
+                                        format!("{:<35}", pkg).yellow(),
+                                        HASH_FETCH_NO_URL.get(lang).dimmed()
+                                    );
+                                    continue;
+                                }
+                            },
+                        };
+
+                        // Infer filename when PKG_SOURCE is not set in the Makefile.
+                        // Try common extensions in the order u-boot.mk uses them.
+                        let inferred_fname: String;
+                        let fname: &str = match parsed.source_file.as_deref() {
+                            Some(f) => f,
+                            None => {
+                                // Standard pattern: <PKG_NAME>-<PKG_VERSION>.<ext>
+                                // Try .tar.bz2, .tar.xz, .tar.gz in order
+                                inferred_fname = format!(
+                                    "{}-{}.tar.bz2",
+                                    parsed.pkg_name, parsed.pkg_version
+                                );
+                                &inferred_fname
+                            }
+                        };
+
                         let new_fname = fname.replace(&parsed.pkg_version, new_version.as_str());
                         let new_url   = url.replace(&parsed.pkg_version, new_version.as_str());
 
