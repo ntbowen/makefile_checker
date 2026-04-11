@@ -519,11 +519,12 @@ impl UpstreamChecker {
             // For prefixed-tag templates (e.g. Custom("lf-${VERSION}")), the full tag
             // name must go into PKG_SOURCE_VERSION; PKG_VERSION gets the dot-normalised
             // version (replace non-dot separators within the version body with dots).
+            // For WithV templates the write_ver already has the 'v' prefix re-added.
             let (write_ver, write_src_ver) = tag_write_fields(&tag, &version, tag_template);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version.clone()),
+                latest_version: Some(write_ver.clone()),
                 latest_tag: Some(tag),
                 latest_commit: None,
                 upstream_commit: None,
@@ -573,7 +574,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version.clone()),
+                latest_version: Some(write_ver.clone()),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit),
                 upstream_commit: None,
@@ -662,7 +663,7 @@ impl UpstreamChecker {
                     let short_sha = full_sha.as_deref()
                         .map(|s| s[..s.len().min(8)].to_string());
 
-                    // Preserve the v-prefix if PKG_VERSION had it
+                    // Preserve the v-prefix if PKG_VERSION had it (for both display and write)
                     let write_version = if parsed.pkg_version.starts_with('v') {
                         format!("v{}", bare_version)
                     } else {
@@ -672,7 +673,7 @@ impl UpstreamChecker {
                     return Ok(UpstreamInfo {
                         pkg_name: parsed.pkg_name.clone(),
                         current_version: parsed.pkg_version.clone(),
-                        latest_version: Some(bare_version.clone()),
+                        latest_version: Some(write_version.clone()),
                         latest_tag: Some(tag_name.clone()),
                         latest_commit: short_sha,
                         upstream_commit: None,
@@ -2157,7 +2158,8 @@ fn tag_write_fields(
     template: &TagTemplate,
 ) -> (String, Option<String>) {
     match template {
-        TagTemplate::WithV | TagTemplate::Plain => (version.to_string(), None),
+        TagTemplate::WithV => (format!("v{}", version), None),
+        TagTemplate::Plain => (version.to_string(), None),
         TagTemplate::Custom(pattern) => {
             // Check if this is a prefix template (e.g. "lf-${VERSION}", "RELEASE-${VERSION}")
             // by seeing whether the pattern has a non-empty, non-digit prefix before ${VERSION}.
