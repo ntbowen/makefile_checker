@@ -48,6 +48,12 @@ pub struct UpstreamInfo {
     /// When true the package must NOT be auto-updated and must be shown with
     /// STATUS_FORMAT_MISMATCH in the report instead of OUTDATED / OK.
     pub format_mismatch: bool,
+
+    /// Current version is strictly newer than the detected latest upstream version.
+    /// This can happen when: (a) the upstream data source returns stale/wrong data
+    /// (e.g. Repology aggregation lag), or (b) a locally patched/bumped version
+    /// is tracked. Shown as STATUS_NEWER in the report.
+    pub is_newer: bool,
 }
 
 // ─────────────────────── API response structs ─────────────────────────────
@@ -187,6 +193,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             },
         };
         // PKG_HASH verification: only when NOT outdated (current tarball)
@@ -386,8 +393,43 @@ impl UpstreamChecker {
         };
 
         // Set format_mismatch flag and clear write fields when formats diverge
-        match result {
+        let result = match result {
             Ok(info) => Ok(self.finalize_format_mismatch(info, parsed)),
+            err => err,
+        };
+
+        // Detect is_newer: current version is strictly newer than detected latest.
+        // This usually means upstream data is stale/wrong (e.g. Repology lag).
+        match result {
+            Ok(mut info) => {
+                if info.is_outdated == Some(false) && !info.format_mismatch {
+                    if let Some(ref latest) = info.latest_version.clone() {
+                        let current = if info.current_version.is_empty() {
+                            parsed.effective_version()
+                        } else {
+                            &info.current_version
+                        };
+                        // Strip display suffix before comparing
+                        let current_bare = if let Some(p) = current.find(" (") {
+                            &current[..p]
+                        } else { current };
+                        let latest_bare = if let Some(p) = latest.find(" (") {
+                            &latest[..p]
+                        } else { latest.as_str() };
+                        if version_cmp(
+                            &normalize_version(current_bare),
+                            &normalize_version(latest_bare),
+                        ) == std::cmp::Ordering::Greater {
+                            info.is_newer = true;
+                            // Clear write fields — we must not downgrade
+                            info.write_pkg_version = None;
+                            info.write_pkg_source_version = None;
+                            info.write_pkg_source_date = None;
+                        }
+                    }
+                }
+                Ok(info)
+            }
             err => err,
         }
     }
@@ -495,6 +537,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: write_src_ver,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -544,6 +587,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: write_src_ver,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -642,6 +686,7 @@ impl UpstreamChecker {
                         write_pkg_source_version: full_sha,
                         write_pkg_source_date: None,
                         format_mismatch: false,
+                is_newer: false,
                     });
                 }
             }
@@ -709,6 +754,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: Some(latest.sha.clone()),
                 write_pkg_source_date: Some(commit_date.clone()),
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -764,6 +810,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -843,6 +890,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -890,6 +938,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -934,6 +983,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -952,12 +1002,22 @@ impl UpstreamChecker {
             .error_for_status().context("repology HTTP error")?
             .json().await.context("parse repology JSON")?;
 
-        // Find newest stable version
+        // Find newest stable version, applying basic data-quality filters:
+        // - reject versions with ≥6 numeric segments (e.g. "3.0.35.4.1.0" is
+        //   clearly a Repology aggregation artefact, not a real release version)
+        // - reject versions where any segment exceeds 9999 (nonsensical)
         let newest = packages
             .iter()
             .filter(|p| {
                 p.status.as_deref() == Some("newest")
                     || p.status.as_deref() == Some("unique")
+            })
+            .filter(|p| {
+                let segs: Vec<u64> = p.version
+                    .split('.')
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                segs.len() < 6 && segs.iter().all(|&n| n <= 9999)
             })
             .max_by(|a, b| version_cmp(&a.version, &b.version));
 
@@ -981,6 +1041,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1039,6 +1100,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1093,6 +1155,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1142,6 +1205,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -1208,6 +1272,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -1252,6 +1317,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -1300,6 +1366,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1353,6 +1420,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -1400,6 +1468,7 @@ impl UpstreamChecker {
             write_pkg_source_version: None,
             write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -1456,6 +1525,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1482,6 +1552,7 @@ impl UpstreamChecker {
             write_pkg_source_version: None,
             write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         }
     }
 
@@ -1541,6 +1612,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1590,6 +1662,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1651,6 +1724,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
                         });
                     }
                 }
@@ -1683,6 +1757,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1740,6 +1815,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -1785,6 +1861,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         })
     }
 
@@ -1834,6 +1911,7 @@ impl UpstreamChecker {
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
             });
         }
 
@@ -2450,6 +2528,7 @@ mod tests {
             write_pkg_source_version: None,
             write_pkg_source_date: None,
                 format_mismatch: false,
+                is_newer: false,
         }
     }
 

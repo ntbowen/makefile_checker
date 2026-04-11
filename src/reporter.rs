@@ -5,7 +5,7 @@ use comfy_table::{presets::UTF8_FULL, Attribute, Cell, CellAlignment, Color, Tab
 use std::path::Path;
 
 use crate::config::OutputFormat;
-use crate::i18n::{Lang, HDR_UPSTREAM_COMMIT, HDR_UPSTREAM_HASH, *};
+use crate::i18n::{Lang, HDR_UPSTREAM_COMMIT, HDR_UPSTREAM_HASH, STATUS_NEWER, SUMMARY_NEWER_CNT, *};
 use crate::makefile_parser::ParsedMakefile;
 use crate::upstream::UpstreamInfo;
 
@@ -50,6 +50,7 @@ pub fn print_results_table(results: &[CheckResult], lang: Lang) {
     let mut unknown = 0usize;
     let mut hash_mismatches = 0usize;
     let mut format_mismatches = 0usize;
+    let mut locally_newer = 0usize;
 
     for r in results {
         let info = &r.upstream;
@@ -58,6 +59,11 @@ pub fn print_results_table(results: &[CheckResult], lang: Lang) {
             format_mismatches += 1;
             Cell::new(STATUS_FORMAT_MISMATCH.get(lang))
                 .fg(Color::Magenta)
+                .add_attribute(Attribute::Bold)
+        } else if info.is_newer {
+            locally_newer += 1;
+            Cell::new(STATUS_NEWER.get(lang))
+                .fg(Color::DarkYellow)
                 .add_attribute(Attribute::Bold)
         } else {
             match info.is_outdated {
@@ -127,6 +133,13 @@ pub fn print_results_table(results: &[CheckResult], lang: Lang) {
             "  {} {}",
             format_mismatches.to_string().magenta().bold(),
             SUMMARY_FORMAT_MISMATCH_CNT.get(lang).magenta(),
+        );
+    }
+    if locally_newer > 0 {
+        print!(
+            "  {} {}",
+            locally_newer.to_string().yellow().bold(),
+            SUMMARY_NEWER_CNT.get(lang).yellow(),
         );
     }
     if hash_mismatches > 0 {
@@ -244,6 +257,8 @@ fn row_data(r: &CheckResult, lang: Lang) -> Vec<String> {
     let info = &r.upstream;
     let status = if info.format_mismatch {
         STATUS_FORMAT_MISMATCH.get(lang)
+    } else if info.is_newer {
+        STATUS_NEWER.get(lang)
     } else {
         match info.is_outdated {
             Some(true) => STATUS_OUTDATED.get(lang),
@@ -354,6 +369,9 @@ fn save_xlsx(results: &[CheckResult], path: &Path, lang: Lang) -> Result<()> {
     let format_mismatch_fmt = Format::new()
         .set_background_color(Color::RGB(0xE8_D5_F5))
         .set_font_color(Color::RGB(0x6A_0D_9A));
+    let newer_fmt = Format::new()
+        .set_background_color(Color::RGB(0xFF_EB_9C))
+        .set_font_color(Color::RGB(0x7F_60_00));
     let default_fmt = Format::new();
 
     for (row_idx, r) in results.iter().enumerate() {
@@ -362,6 +380,8 @@ fn save_xlsx(results: &[CheckResult], path: &Path, lang: Lang) -> Result<()> {
 
         let row_fmt = if r.upstream.format_mismatch {
             &format_mismatch_fmt
+        } else if r.upstream.is_newer {
+            &newer_fmt
         } else {
             match r.upstream.is_outdated {
                 Some(true) => &outdated_fmt,

@@ -127,6 +127,7 @@ pub const STATUS_OUTDATED: T = T("OUTDATED", "有更新");
 pub const STATUS_OK: T = T("OK", "最新");
 pub const STATUS_UNKNOWN: T = T("?", "?");
 pub const STATUS_FORMAT_MISMATCH: T = T("FORMAT?", "格式不一致");
+pub const STATUS_NEWER: T = T("NEWER!", "本地更新");
 
 // Summary
 pub const SUMMARY_ALL_OK: T = T("All packages are up-to-date!", "所有包均为最新版本！");
@@ -136,6 +137,7 @@ pub const SUMMARY_OUTDATED_CNT: T = T("outdated", "个有更新");
 pub const SUMMARY_OK_CNT: T = T("up-to-date", "个已最新");
 pub const SUMMARY_UNKNOWN_CNT: T = T("unknown", "个未知");
 pub const SUMMARY_FORMAT_MISMATCH_CNT: T = T("format-mismatch", "个格式不一致");
+pub const SUMMARY_NEWER_CNT: T = T("locally-newer", "个本地更新");
 
 // Save
 pub const SAVE_XLSX: T = T("Saved XLSX:", "已保存 XLSX：");
