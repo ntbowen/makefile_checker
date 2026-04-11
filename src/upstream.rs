@@ -546,6 +546,90 @@ impl UpstreamChecker {
         repo: &str,
         current_commit: &str,
     ) -> Result<UpstreamInfo> {
+        // ── Step 1: Check releases/tags first ─────────────────────────────
+        // Many packages track upstream via commit SHA in PKG_SOURCE_VERSION
+        // but the upstream repo ALSO publishes releases/tags (e.g. at91bootstrap
+        // has v4.0.10, v4.0.13-rc1, etc.).  We should prefer a release/tag result
+        // when one exists with a format that matches PKG_VERSION, so that the user
+        // sees the canonical release version rather than a raw commit date.
+        let tags_url = format!("https://api.github.com/repos/{}/{}/tags", owner, repo);
+        let upstream_releases_url = format!("https://github.com/{}/{}/releases", owner, repo);
+        let current_pkg_ver = parsed.pkg_version.trim_start_matches('v');
+        let current_fmt = version_format_class(current_pkg_ver);
+
+        if let Ok(tags) = self
+            .github_send(self.github_client.get(&tags_url).query(&[("per_page", "100")])).await
+            .and_then(|r| Ok(r))
+        {
+            if let Ok(tags) = tags.json::<Vec<GithubTag>>().await {
+                // Collect all tags whose version format matches PKG_VERSION's format
+                // (e.g. if PKG_VERSION=v4.0.10, we want semver tags like v4.0.13)
+                let mut compatible: Vec<(String, String)> = tags
+                    .iter()
+                    .filter_map(|t| {
+                        // Strip common prefixes to get the bare version
+                        let bare = t.name
+                            .trim_start_matches('v')
+                            .trim_start_matches('V');
+                        if !bare.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                            return None;
+                        }
+                        let fmt = version_format_class(bare);
+                        if fmt == current_fmt {
+                            Some((t.name.clone(), bare.to_string()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Sort descending by version
+                compatible.sort_by(|a, b| version_cmp(&b.1, &a.1));
+
+                // Pick best: try stable first, then allow pre-release
+                let best_stable = compatible.iter()
+                    .find(|(tag, _)| !is_prerelease_tag(tag));
+                let best = best_stable.or_else(|| compatible.first());
+
+                if let Some((tag_name, bare_version)) = best {
+                    let is_outdated = compare_versions(current_pkg_ver, bare_version);
+                    // Full commit SHA for the tag (used to update PKG_SOURCE_VERSION)
+                    let full_sha = tags.iter()
+                        .find(|t| &t.name == tag_name)
+                        .map(|t| t.commit.sha.clone());
+                    let short_sha = full_sha.as_deref()
+                        .map(|s| s[..s.len().min(8)].to_string());
+
+                    // Preserve the v-prefix if PKG_VERSION had it
+                    let write_version = if parsed.pkg_version.starts_with('v') {
+                        format!("v{}", bare_version)
+                    } else {
+                        bare_version.clone()
+                    };
+
+                    return Ok(UpstreamInfo {
+                        pkg_name: parsed.pkg_name.clone(),
+                        current_version: parsed.pkg_version.clone(),
+                        latest_version: Some(bare_version.clone()),
+                        latest_tag: Some(tag_name.clone()),
+                        latest_commit: short_sha,
+                        upstream_commit: None,
+                        latest_hash_sha256: None,
+                        is_outdated: Some(is_outdated),
+                        upstream_url: Some(upstream_releases_url),
+                        check_error: None,
+                        source_backend: "github-commit+tags".to_string(),
+                        hash_mismatch: None,
+                        write_pkg_version: Some(write_version),
+                        write_pkg_source_version: full_sha,
+                        write_pkg_source_date: None,
+                        format_mismatch: false,
+                    });
+                }
+            }
+        }
+
+        // ── Step 2: Fall back to raw commit comparison ────────────────────
         let api_url = format!("https://api.github.com/repos/{}/{}/commits", owner, repo);
         let upstream_url = format!("https://github.com/{}/{}/commits", owner, repo);
 
