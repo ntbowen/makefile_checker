@@ -555,9 +555,22 @@ impl UpstreamChecker {
         upstream_url: &str,
     ) -> Result<UpstreamInfo> {
         let api_url = format!("https://api.github.com/repos/{}/{}/tags", owner, repo);
-        let tags: Vec<GithubTag> = self
-            .github_send(self.github_client.get(&api_url).query(&[("per_page", "30")])).await?
+        let mut tags: Vec<GithubTag> = self
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "100"), ("page", "1")])).await?
             .json().await.context("parse tags JSON")?;
+
+        // For Custom (prefixed) templates the matching tags may be spread across many pages
+        // because repos like nxp-qoriq/u-boot have hundreds of tags with various prefixes.
+        // Fetch a second page to improve coverage without too many API calls.
+        if matches!(tag_template, TagTemplate::Custom(_)) && tags.len() == 100 {
+            if let Ok(resp) = self.github_send(
+                self.github_client.get(&api_url).query(&[("per_page", "100"), ("page", "2")])
+            ).await {
+                if let Ok(page2) = resp.json::<Vec<GithubTag>>().await {
+                    tags.extend(page2);
+                }
+            }
+        }
 
         // Filter out pre-release tags
         let stable_tags: Vec<&GithubTag> = tags
