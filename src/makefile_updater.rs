@@ -4,10 +4,12 @@ use std::path::Path;
 /// Fields that can be updated in a Makefile.
 #[derive(Debug, Default)]
 pub struct MakefileUpdate {
-    /// New PKG_VERSION value
+    /// New PKG_VERSION value (plain semver/date, no hash suffix)
     pub pkg_version: Option<String>,
-    /// New PKG_SOURCE_VERSION (commit SHA) value
+    /// New PKG_SOURCE_VERSION (full commit SHA)
     pub pkg_source_version: Option<String>,
+    /// New PKG_SOURCE_DATE (YYYY-MM-DD)
+    pub pkg_source_date: Option<String>,
     /// New PKG_HASH value
     pub pkg_hash: Option<String>,
 }
@@ -41,6 +43,7 @@ fn apply_updates(content: &str, update: &MakefileUpdate, changed: &mut Vec<Strin
     for line in content.lines() {
         let new_line = try_replace_var(line, "PKG_VERSION", update.pkg_version.as_deref(), changed)
             .or_else(|| try_replace_var(line, "PKG_SOURCE_VERSION", update.pkg_source_version.as_deref(), changed))
+            .or_else(|| try_replace_var(line, "PKG_SOURCE_DATE", update.pkg_source_date.as_deref(), changed))
             .or_else(|| try_replace_var(line, "PKG_HASH", update.pkg_hash.as_deref(), changed));
 
         match new_line {

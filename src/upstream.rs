@@ -10,7 +10,9 @@ use crate::makefile_parser::{ParsedMakefile, SourceType, TagTemplate};
 #[allow(dead_code)]
 pub struct UpstreamInfo {
     pub pkg_name: String,
+    /// Human-readable display string for the current version (may include hash/date)
     pub current_version: String,
+    /// Human-readable display string for the latest version (may include hash/date)
     pub latest_version: Option<String>,
     pub latest_tag: Option<String>,
     /// Commit SHA associated with the latest version tag
@@ -26,6 +28,20 @@ pub struct UpstreamInfo {
     pub source_backend: String,
     /// PKG_HASH mismatch: Some(true) = mismatch detected, Some(false) = ok, None = not checked
     pub hash_mismatch: Option<bool>,
+
+    // ── Safe Makefile write fields ──────────────────────────────────────────
+    // These are the values to write into the Makefile.  They are SEPARATE from
+    // the display fields above, which may be formatted for human readability.
+    // Each field is None if the corresponding Makefile variable should NOT be
+    // touched (e.g. a commit-tracked package must not update PKG_VERSION with
+    // a date string; a release package must not touch PKG_SOURCE_VERSION).
+
+    /// Value to write into PKG_VERSION (plain semver/date, no hash suffix)
+    pub write_pkg_version: Option<String>,
+    /// Value to write into PKG_SOURCE_VERSION (full commit SHA)
+    pub write_pkg_source_version: Option<String>,
+    /// Value to write into PKG_SOURCE_DATE (YYYY-MM-DD)
+    pub write_pkg_source_date: Option<String>,
 }
 
 // ─────────────────────── API response structs ─────────────────────────────
@@ -161,6 +177,9 @@ impl UpstreamChecker {
                 check_error: Some(e.to_string()),
                 source_backend: "error".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: None,
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             },
         };
         // PKG_HASH verification: only when NOT outdated (current tarball)
@@ -416,7 +435,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: Some(tag),
                 latest_commit: None,
                 upstream_commit: None,
@@ -426,6 +445,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-release".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -460,7 +482,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit),
                 upstream_commit: None,
@@ -470,6 +492,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-tags".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -542,6 +567,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-commit".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: None,
+                write_pkg_source_version: Some(latest.sha.clone()),
+                write_pkg_source_date: Some(commit_date.clone()),
             });
         }
 
@@ -583,7 +611,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: Some(commit_short),
                 upstream_commit: None,
@@ -593,6 +621,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-tag-path".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -668,6 +699,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: format!("gitlab({})", host),
                 hash_mismatch: None,
+                write_pkg_version: None,
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -701,7 +735,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(v),
+                latest_version: Some(v.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -711,6 +745,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "sourceforge".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(v),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -741,7 +778,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -751,6 +788,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "pypi".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
         })
     }
 
@@ -784,7 +824,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -794,6 +834,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "repology".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -838,7 +881,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: Some(tag.name.clone()),
                 latest_commit: None,
                 upstream_commit: None,
@@ -848,6 +891,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "bitbucket".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -898,6 +944,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: format!("gitea({})", host),
                 hash_mismatch: None,
+                write_pkg_version: None,
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -933,7 +982,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -943,6 +992,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "crates.io".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
         })
     }
 
@@ -995,7 +1047,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -1005,6 +1057,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "npm".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
         })
     }
 
@@ -1035,7 +1090,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -1045,6 +1100,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "rubygems".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
         })
     }
 
@@ -1079,7 +1137,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1089,6 +1147,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "hackage".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -1128,7 +1189,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -1138,6 +1199,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "cpan".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
         })
     }
 
@@ -1171,7 +1235,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -1181,6 +1245,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "pecl".to_string(),
             hash_mismatch: None,
+            write_pkg_version: Some(version),
+            write_pkg_source_version: None,
+            write_pkg_source_date: None,
         })
     }
 
@@ -1223,7 +1290,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(v),
+                latest_version: Some(v.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1233,6 +1300,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "anitya".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(v),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -1255,6 +1325,9 @@ impl UpstreamChecker {
             check_error: Some(reason.to_string()),
             source_backend: reason.to_string(),
             hash_mismatch: None,
+            write_pkg_version: None,
+            write_pkg_source_version: None,
+            write_pkg_source_date: None,
         }
     }
 
@@ -1300,7 +1373,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(v),
+                latest_version: Some(v.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1310,6 +1383,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "kernel.org".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(v),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -1345,7 +1421,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1355,6 +1431,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "kernel.org".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -1402,7 +1481,7 @@ impl UpstreamChecker {
                         return Ok(UpstreamInfo {
                             pkg_name: parsed.pkg_name.clone(),
                             current_version: parsed.effective_version().to_string(),
-                            latest_version: Some(version),
+                            latest_version: Some(version.clone()),
                             latest_tag: Some(tag.name.clone()),
                             latest_commit: None,
                             upstream_commit: None,
@@ -1412,6 +1491,9 @@ impl UpstreamChecker {
                             check_error: None,
                             source_backend: "cgit".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
                         });
                     }
                 }
@@ -1430,7 +1512,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(v),
+                latest_version: Some(v.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1440,6 +1522,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "cgit".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(v),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -1483,7 +1568,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1493,6 +1578,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "maven-central".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -1524,7 +1612,7 @@ impl UpstreamChecker {
         Ok(UpstreamInfo {
             pkg_name: parsed.pkg_name.clone(),
             current_version: parsed.effective_version().to_string(),
-            latest_version: Some(version),
+            latest_version: Some(version.clone()),
             latest_tag: None,
             latest_commit: None,
             upstream_commit: None,
@@ -1534,6 +1622,9 @@ impl UpstreamChecker {
             check_error: None,
             source_backend: "go-module".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
         })
     }
 
@@ -1569,7 +1660,7 @@ impl UpstreamChecker {
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
-                latest_version: Some(version),
+                latest_version: Some(version.clone()),
                 latest_tag: None,
                 latest_commit: None,
                 upstream_commit: None,
@@ -1579,6 +1670,9 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "url-regex".to_string(),
                 hash_mismatch: None,
+                write_pkg_version: Some(version),
+                write_pkg_source_version: None,
+                write_pkg_source_date: None,
             });
         }
 
@@ -2107,6 +2201,9 @@ mod tests {
             check_error: None,
             source_backend: "test".to_string(),
             hash_mismatch: None,
+            write_pkg_version: Some(latest.to_string()),
+            write_pkg_source_version: None,
+            write_pkg_source_date: None,
         }
     }
 

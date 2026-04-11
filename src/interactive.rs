@@ -709,9 +709,15 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                                 continue;
                             }
                         };
-                        let new_version = match &info.latest_version {
+                        // For hash fetch we need a plain version to substitute into
+                        // the URL/filename.  Use write_pkg_version (the safe Makefile
+                        // value) — commit-tracked packages have no tarball URL to fetch.
+                        let new_version = match &info.write_pkg_version {
                             Some(v) => v,
-                            None => continue,
+                            None => {
+                                // Commit-tracked: no tarball to hash
+                                continue;
+                            }
                         };
                         let new_fname = fname.replace(&parsed.pkg_version, new_version.as_str());
                         let new_url   = url.replace(&parsed.pkg_version, new_version.as_str());
@@ -748,17 +754,38 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                     for r in &chosen {
                         let info = &r.upstream;
                         let pkg  = &info.pkg_name;
-                        let new_version = info.latest_version.as_deref().unwrap_or("?");
                         let new_hash = hash_map.get(pkg.as_str());
                         let hash_preview = new_hash
                             .map(|h| format!("  PKG_HASH → {}", &h[..h.len().min(16)]))
                             .unwrap_or_else(|| "  PKG_HASH → (not fetched, unchanged)".dimmed().to_string());
-                        println!(
-                            "  {}  PKG_VERSION → {}  {}",
-                            format!("{:<35}", pkg).yellow().bold(),
-                            new_version.green().bold(),
-                            hash_preview.dimmed(),
-                        );
+                        // Show what will actually be written to the Makefile
+                        if let Some(v) = &info.write_pkg_version {
+                            println!(
+                                "  {}  PKG_VERSION → {}  {}",
+                                format!("{:<35}", pkg).yellow().bold(),
+                                v.green().bold(),
+                                hash_preview.dimmed(),
+                            );
+                        } else if let Some(sv) = &info.write_pkg_source_version {
+                            let short = &sv[..sv.len().min(12)];
+                            let date_part = info.write_pkg_source_date.as_deref()
+                                .map(|d| format!("  PKG_SOURCE_DATE → {}", d))
+                                .unwrap_or_default();
+                            println!(
+                                "  {}  PKG_SOURCE_VERSION → {}{}  {}",
+                                format!("{:<35}", pkg).yellow().bold(),
+                                short.green().bold(),
+                                date_part.green(),
+                                hash_preview.dimmed(),
+                            );
+                        } else {
+                            println!(
+                                "  {}  {} {}",
+                                format!("{:<35}", pkg).yellow(),
+                                UPDATE_NOTHING.get(lang).dimmed(),
+                                hash_preview.dimmed(),
+                            );
+                        }
                     }
                     println!();
 
@@ -775,23 +802,30 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
                             let pkg  = &info.pkg_name;
                             let path = &r.parsed.path;
 
-                            let new_version = match &info.latest_version {
-                                Some(v) => v.clone(),
-                                None => {
-                                    println!(
-                                        "  {}  {}",
-                                        format!("{:<35}", pkg).yellow(),
-                                        UPDATE_NOTHING.get(lang).dimmed()
-                                    );
-                                    continue;
-                                }
-                            };
+                            // Skip packages where we have nothing safe to write
+                            if info.write_pkg_version.is_none()
+                                && info.write_pkg_source_version.is_none()
+                                && commit_map.get(pkg.as_str()).is_none()
+                            {
+                                println!(
+                                    "  {}  {}",
+                                    format!("{:<35}", pkg).yellow(),
+                                    UPDATE_NOTHING.get(lang).dimmed()
+                                );
+                                continue;
+                            }
 
                             let new_hash = hash_map.get(pkg.as_str()).cloned();
 
+                            // Use commit from live fetch (if available) over the cached result
+                            let write_sv = commit_map.get(pkg.as_str())
+                                .cloned()
+                                .or_else(|| info.write_pkg_source_version.clone());
+
                             let upd = MakefileUpdate {
-                                pkg_version: Some(new_version),
-                                pkg_source_version: None,
+                                pkg_version: info.write_pkg_version.clone(),
+                                pkg_source_version: write_sv,
+                                pkg_source_date: info.write_pkg_source_date.clone(),
                                 pkg_hash: new_hash,
                             };
 
