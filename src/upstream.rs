@@ -555,22 +555,37 @@ impl UpstreamChecker {
         upstream_url: &str,
     ) -> Result<UpstreamInfo> {
         let api_url = format!("https://api.github.com/repos/{}/{}/tags", owner, repo);
-        let mut tags: Vec<GithubTag> = self
-            .github_send(self.github_client.get(&api_url).query(&[("per_page", "100"), ("page", "1")])).await?
-            .json().await.context("parse tags JSON")?;
 
-        // For Custom (prefixed) templates the matching tags may be spread across many pages
-        // because repos like nxp-qoriq/u-boot have hundreds of tags with various prefixes.
-        // Fetch a second page to improve coverage without too many API calls.
-        if matches!(tag_template, TagTemplate::Custom(_)) && tags.len() == 100 {
-            if let Ok(resp) = self.github_send(
-                self.github_client.get(&api_url).query(&[("per_page", "100"), ("page", "2")])
+        // For Custom (prefixed) templates, repos like nxp-qoriq/u-boot have hundreds of
+        // tags with many different prefixes (LSDK-*, QorIQ-*, lf-*, …).  We keep fetching
+        // pages until we find at least one matching tag, reach an incomplete page (< 100),
+        // or hit the safety cap of 5 pages (500 tags).  For Plain/WithV templates one page
+        // is almost always sufficient, so we only fetch one page.
+        let max_pages: u32 = if matches!(tag_template, TagTemplate::Custom(_)) { 5 } else { 1 };
+        let mut tags: Vec<GithubTag> = Vec::new();
+        let mut best_found = false;
+        for page in 1..=max_pages {
+            let page_str = page.to_string();
+            let page_tags: Vec<GithubTag> = match self.github_send(
+                self.github_client.get(&api_url).query(&[("per_page", "100"), ("page", page_str.as_str())])
             ).await {
-                if let Ok(page2) = resp.json::<Vec<GithubTag>>().await {
-                    tags.extend(page2);
-                }
+                Ok(resp) => match resp.json::<Vec<GithubTag>>().await {
+                    Ok(t) => t,
+                    Err(_) => break,
+                },
+                Err(_) => break,
+            };
+            let incomplete = page_tags.len() < 100;
+            tags.extend(page_tags);
+            // Check if we already have a matching tag to avoid unnecessary extra pages
+            let stable_so_far: Vec<&GithubTag> = tags.iter().filter(|t| !is_prerelease_tag(&t.name)).collect();
+            if find_best_tag(&stable_so_far, tag_template, &parsed.pkg_version).is_some() {
+                best_found = true;
+                break;
             }
+            if incomplete { break; }
         }
+        let _ = best_found; // used only for early-exit logic above
 
         // Filter out pre-release tags
         let stable_tags: Vec<&GithubTag> = tags
