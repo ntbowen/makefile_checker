@@ -474,6 +474,10 @@ impl UpstreamChecker {
             let tag = rel.tag_name.clone();
             let version = extract_version_from_tag(&tag, tag_template);
             let is_outdated = compare_versions(parsed.effective_version(), &version);
+            // For prefixed-tag templates (e.g. Custom("lf-${VERSION}")), the full tag
+            // name must go into PKG_SOURCE_VERSION; PKG_VERSION gets the dot-normalised
+            // version (replace non-dot separators within the version body with dots).
+            let (write_ver, write_src_ver) = tag_write_fields(&tag, &version, tag_template);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
@@ -487,8 +491,8 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-release".to_string(),
                 hash_mismatch: None,
-                write_pkg_version: Some(version),
-                write_pkg_source_version: None,
+                write_pkg_version: Some(write_ver),
+                write_pkg_source_version: write_src_ver,
                 write_pkg_source_date: None,
                 format_mismatch: false,
             });
@@ -522,6 +526,7 @@ impl UpstreamChecker {
         if let Some((tag, version)) = best {
             let commit = tag.commit.sha[..tag.commit.sha.len().min(8)].to_string();
             let is_outdated = compare_versions(parsed.effective_version(), &version);
+            let (write_ver, write_src_ver) = tag_write_fields(&tag.name, &version, tag_template);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
@@ -535,8 +540,8 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-tags".to_string(),
                 hash_mismatch: None,
-                write_pkg_version: Some(version),
-                write_pkg_source_version: None,
+                write_pkg_version: Some(write_ver),
+                write_pkg_source_version: write_src_ver,
                 write_pkg_source_date: None,
                 format_mismatch: false,
             });
@@ -2061,6 +2066,39 @@ pub fn is_prerelease_tag(tag: &str) -> bool {
     false
 }
 
+/// Compute the (write_pkg_version, write_pkg_source_version) pair for a given tag.
+///
+/// - For `WithV` / `Plain`: PKG_VERSION = version string; PKG_SOURCE_VERSION not touched.
+/// - For `Custom("prefix-${VERSION}")` where prefix is non-empty text: PKG_VERSION gets
+///   the version with internal non-dot separators normalised to dots (so `6.18.2-1.0.0`
+///   becomes `6.18.2.1.0.0`); PKG_SOURCE_VERSION gets the full tag name (e.g.
+///   `lf-6.18.2-1.0.0`) because that is what OpenWrt uses for git checkout.
+fn tag_write_fields(
+    tag_name: &str,
+    version: &str,
+    template: &TagTemplate,
+) -> (String, Option<String>) {
+    match template {
+        TagTemplate::WithV | TagTemplate::Plain => (version.to_string(), None),
+        TagTemplate::Custom(pattern) => {
+            // Check if this is a prefix template (e.g. "lf-${VERSION}", "RELEASE-${VERSION}")
+            // by seeing whether the pattern has a non-empty, non-digit prefix before ${VERSION}.
+            let before = pattern.split("${VERSION}").next().unwrap_or("");
+            let has_text_prefix = !before.is_empty()
+                && before.trim_start_matches(|c: char| !c.is_ascii_alphanumeric()).len() < before.len()
+                && before.chars().any(|c| c.is_ascii_alphabetic());
+            if has_text_prefix {
+                // Normalise separators in the version body to dots for PKG_VERSION
+                // e.g. "6.18.2-1.0.0" -> "6.18.2.1.0.0"
+                let dot_ver = version.replace('-', ".");
+                (dot_ver, Some(tag_name.to_string()))
+            } else {
+                (version.to_string(), None)
+            }
+        }
+    }
+}
+
 fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
     match template {
         TagTemplate::WithV => tag.trim_start_matches('v').to_string(),
@@ -2722,6 +2760,25 @@ mod tests {
     }
 
     // ── tag sort regression: at91bootstrap ───────────────────────────────
+
+    // ── tfa-layerscape prefixed-tag regression ────────────────────────────
+
+    #[test]
+    fn test_extract_version_from_lf_tag() {
+        let tmpl = TagTemplate::Custom("lf-${VERSION}".to_string());
+        assert_eq!(extract_version_from_tag("lf-6.18.2-1.0.0", &tmpl), "6.18.2-1.0.0");
+        assert_eq!(extract_version_from_tag("lf-6.12.20-2.0.0", &tmpl), "6.12.20-2.0.0");
+    }
+
+    #[test]
+    fn test_lf_tag_version_comparison() {
+        // 6.18.2 > 6.12.20 → lf-6.18.2-1.0.0 is newer
+        assert_eq!(
+            version_cmp("6.18.2-1.0.0", "6.12.20-2.0.0"),
+            std::cmp::Ordering::Greater,
+            "6.18.2-1.0.0 should be newer than 6.12.20-2.0.0"
+        );
+    }
 
     #[test]
     fn test_tag_sort_at91bootstrap() {

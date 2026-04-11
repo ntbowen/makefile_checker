@@ -1223,6 +1223,35 @@ fn detect_tag_template(ref_part: &str, pkg_version: &str) -> TagTemplate {
         let tmpl = ref_part.replace(&ver_dotless, "${VERSION_NODOT}");
         return TagTemplate::Custom(tmpl);
     }
+
+    // Packages like tfa-layerscape / uboot-layerscape use a text-prefixed tag whose
+    // numeric components equal those in PKG_VERSION but with different separators.
+    // e.g. PKG_VERSION=6.12.20.2.0.0  PKG_SOURCE_VERSION=lf-6.12.20-2.0.0
+    // Detect: numeric segments of ref_part == numeric segments of pkg_version,
+    // and ref_part starts with a non-digit prefix.
+    // Build template Custom("<prefix>${VERSION}") so that other tags in the same
+    // family (e.g. lf-6.18.2-1.0.0) are correctly matched and version-extracted.
+    {
+        let nums_ref: Vec<&str> = ref_part
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let nums_ver: Vec<&str> = pkg_version
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !nums_ref.is_empty()
+            && nums_ref == nums_ver
+            && ref_part.starts_with(|c: char| !c.is_ascii_digit())
+        {
+            if let Some(first_digit_pos) = ref_part.find(|c: char| c.is_ascii_digit()) {
+                let prefix = &ref_part[..first_digit_pos];
+                let tmpl = format!("{}${{VERSION}}", prefix);
+                return TagTemplate::Custom(tmpl);
+            }
+        }
+    }
+
     // Generic custom template: e.g. "release-1.2.3" or "liburing-2.14" or "app/v1.2.3"
     TagTemplate::Custom(ref_part.replace(pkg_version, "${VERSION}"))
 }
@@ -2326,6 +2355,19 @@ mod tests {
                 if owner == "raspberrypi" && repo == "firmware"
                 && matches!(tag_template, TagTemplate::Custom(p) if p.contains("${VERSION_NODOT}"))),
             "bcm27xx-gpu-fw nodot URL should produce Custom(VERSION_NODOT) template, got {:?}", st
+        );
+    }
+
+    // ── detect_tag_template: prefixed-tag family (tfa-layerscape / uboot-layerscape) ──
+
+    #[test]
+    fn test_detect_tag_template_lf_prefix() {
+        // PKG_VERSION=6.12.20.2.0.0  PKG_SOURCE_VERSION=lf-6.12.20-2.0.0
+        // numeric segments are equal → should produce Custom("lf-${VERSION}")
+        let tmpl = detect_tag_template("lf-6.12.20-2.0.0", "6.12.20.2.0.0");
+        assert!(
+            matches!(&tmpl, TagTemplate::Custom(s) if s == "lf-${VERSION}"),
+            "expected Custom(\"lf-${{VERSION}}\"), got {:?}", tmpl
         );
     }
 
