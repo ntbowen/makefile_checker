@@ -626,7 +626,7 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
             let action_sel = Select::with_theme(&theme)
                 .with_prompt(OUTDATED_ACTION_PROMPT.get(lang))
                 .items(actions)
-                .default(2)   // default: fetch hash THEN update
+                .default(0)   // default: fetch hash only (no Makefile write)
                 .interact()?;
 
             if action_sel == 3 {
