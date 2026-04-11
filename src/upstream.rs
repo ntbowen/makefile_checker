@@ -2193,7 +2193,6 @@ fn tag_write_fields(
             // by seeing whether the pattern has a non-empty, non-digit prefix before ${VERSION}.
             let before = pattern.split("${VERSION}").next().unwrap_or("");
             let has_text_prefix = !before.is_empty()
-                && before.trim_start_matches(|c: char| !c.is_ascii_alphanumeric()).len() < before.len()
                 && before.chars().any(|c| c.is_ascii_alphabetic());
             if has_text_prefix {
                 // Normalise separators in the version body to dots for PKG_VERSION
@@ -2891,6 +2890,36 @@ mod tests {
         let tmpl = TagTemplate::Custom("lf-${VERSION}".to_string());
         assert_eq!(extract_version_from_tag("lf-6.18.2-1.0.0", &tmpl), "6.18.2-1.0.0");
         assert_eq!(extract_version_from_tag("lf-6.12.20-2.0.0", &tmpl), "6.12.20-2.0.0");
+    }
+
+    #[test]
+    fn test_find_best_tag_lf_prefix() {
+        // Simulates nxp-qoriq/u-boot tag list where many non-lf- tags precede the lf- ones.
+        // find_best_tag should select lf-6.18.2-1.0.0 as the best matching tag.
+        let make_tag = |name: &str| GithubTag {
+            name: name.to_string(),
+            commit: crate::upstream::GithubTagCommit { sha: "a".repeat(40) },
+        };
+        let raw_tags = vec![
+            make_tag("LSDK-21.08-V5.4"),
+            make_tag("LSDK-20.12-V5.4"),
+            make_tag("QorIQ-SDK-V2.0-20160527"),
+            make_tag("lf-6.18.2-1.0.0"),
+            make_tag("lf-6.12.20-2.0.0"),
+            make_tag("lf-6.6.3-1.0.0"),
+        ];
+        let stable: Vec<&GithubTag> = raw_tags.iter().filter(|t| !is_prerelease_tag(&t.name)).collect();
+        let tmpl = TagTemplate::Custom("lf-${VERSION}".to_string());
+        let best = find_best_tag(&stable, &tmpl, "6.12.20.2.0.0");
+        assert!(best.is_some(), "should find a matching lf- tag");
+        let (tag, version) = best.unwrap();
+        assert_eq!(tag.name, "lf-6.18.2-1.0.0", "best tag should be lf-6.18.2-1.0.0");
+        assert_eq!(version, "6.18.2-1.0.0");
+
+        // write fields should dot-normalise version and return full tag as src version
+        let (write_ver, write_src) = tag_write_fields(&tag.name, &version, &tmpl);
+        assert_eq!(write_ver, "6.18.2.1.0.0");
+        assert_eq!(write_src, Some("lf-6.18.2-1.0.0".to_string()));
     }
 
     #[test]
