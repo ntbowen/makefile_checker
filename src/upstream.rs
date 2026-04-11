@@ -515,12 +515,14 @@ impl UpstreamChecker {
         if let Some(rel) = latest {
             let tag = rel.tag_name.clone();
             let version = extract_version_from_tag(&tag, tag_template);
-            let is_outdated = compare_versions(parsed.effective_version(), &version);
             // For prefixed-tag templates (e.g. Custom("lf-${VERSION}")), the full tag
             // name must go into PKG_SOURCE_VERSION; PKG_VERSION gets the dot-normalised
             // version (replace non-dot separators within the version body with dots).
             // For WithV templates the write_ver already has the 'v' prefix re-added.
             let (write_ver, write_src_ver) = tag_write_fields(&tag, &version, tag_template);
+            // Use write_ver for comparison (dot-normalised) to avoid semver pre-release
+            // misclassification of versions like '6.18.2-1.0.0'.
+            let is_outdated = compare_versions(parsed.effective_version(), &write_ver);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
@@ -597,8 +599,11 @@ impl UpstreamChecker {
 
         if let Some((tag, version)) = best {
             let commit = tag.commit.sha[..tag.commit.sha.len().min(8)].to_string();
-            let is_outdated = compare_versions(parsed.effective_version(), &version);
             let (write_ver, write_src_ver) = tag_write_fields(&tag.name, &version, tag_template);
+            // Use the write_ver (dot-normalised) for comparison so that versions like
+            // '6.18.2-1.0.0' (treated as semver pre-release) are compared correctly
+            // against the dot-separated PKG_VERSION '6.12.20.2.0.0'.
+            let is_outdated = compare_versions(parsed.effective_version(), &write_ver);
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
@@ -2930,6 +2935,22 @@ mod tests {
             std::cmp::Ordering::Greater,
             "6.18.2-1.0.0 should be newer than 6.12.20-2.0.0"
         );
+    }
+
+    #[test]
+    fn test_lf_compare_versions_dot_normalised() {
+        // After tag_write_fields, version becomes "6.18.2.1.0.0" (dots).
+        // compare_versions must use the dot-normalised form so that the dashed
+        // form "6.18.2-1.0.0" (treated as semver pre-release) does not break
+        // the is_outdated detection against effective_version "6.12.20.2.0.0".
+        assert!(
+            compare_versions("6.12.20.2.0.0", "6.18.2.1.0.0"),
+            "dot-normalised: 6.18.2.1.0.0 should be newer than 6.12.20.2.0.0"
+        );
+        // The raw dashed form is unreliable (semver pre-release semantics).
+        // We document the known breakage here for awareness but do not assert on it
+        // because the fix is to never compare with the raw dashed version.
+        let _ = compare_versions("6.12.20.2.0.0", "6.18.2-1.0.0");
     }
 
     #[test]
