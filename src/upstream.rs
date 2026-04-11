@@ -574,6 +574,11 @@ impl UpstreamChecker {
                         if !bare.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
                             return None;
                         }
+                        // Skip hardware/platform variant tags (e.g. v4.0.10+sama7d65)
+                        // These '+' suffixed tags are not canonical releases.
+                        if bare.contains('+') {
+                            return None;
+                        }
                         let fmt = version_format_class(bare);
                         if fmt == current_fmt {
                             Some((t.name.clone(), bare.to_string()))
@@ -2678,5 +2683,24 @@ mod tests {
         assert!(!compare_versions("v4.0.10", "2026-03-13"),
             "semver current vs calendar latest must not be outdated");
         assert!(!compare_versions("3.10.4", "2026-03-13"));
+    }
+
+    // ── tag sort regression: at91bootstrap ───────────────────────────────
+
+    #[test]
+    fn test_tag_sort_at91bootstrap() {
+        let mut tags: Vec<(String, String)> = vec![
+            ("v4.0.13-rc1".to_string(), "4.0.13-rc1".to_string()),
+            ("v4.0.12".to_string(),     "4.0.12".to_string()),
+            ("v4.0.12-rc2".to_string(), "4.0.12-rc2".to_string()),
+            ("v4.0.12-rc1".to_string(), "4.0.12-rc1".to_string()),
+            ("v4.0.11".to_string(),     "4.0.11".to_string()),
+            ("v4.0.10".to_string(),     "4.0.10".to_string()),
+            ("v4.0.10+sama7d65".to_string(), "4.0.10+sama7d65".to_string()),
+        ];
+        tags.sort_by(|a, b| version_cmp(&b.1, &a.1));
+        let best_stable = tags.iter().find(|(tag, _)| !is_prerelease_tag(tag));
+        assert_eq!(best_stable.map(|(t, _)| t.as_str()), Some("v4.0.12"),
+            "v4.0.12 should be the best stable tag");
     }
 }
