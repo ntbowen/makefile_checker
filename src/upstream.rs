@@ -503,9 +503,13 @@ impl UpstreamChecker {
         let api_url = format!("https://api.github.com/repos/{}/{}/releases", owner, repo);
         let upstream_url = format!("https://github.com/{}/{}/releases", owner, repo);
 
-        let releases: Vec<GithubRelease> = self
-            .github_send(self.github_client.get(&api_url).query(&[("per_page", "20")])).await?
-            .json().await.context("parse releases JSON")?;
+        // If the releases API fails (404, rate-limit, etc.) fall through to the tags API.
+        let releases: Vec<GithubRelease> = match self
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "20")])).await
+        {
+            Ok(resp) => resp.json().await.unwrap_or_default(),
+            Err(_) => vec![],
+        };
 
         // Skip prerelease, draft, and pre-release tags (rc/alpha/beta/dev)
         let latest = releases
@@ -561,9 +565,9 @@ impl UpstreamChecker {
         // For Custom (prefixed) templates, repos like nxp-qoriq/u-boot have hundreds of
         // tags with many different prefixes (LSDK-*, QorIQ-*, lf-*, …).  We keep fetching
         // pages until we find at least one matching tag, reach an incomplete page (< 100),
-        // or hit the safety cap of 5 pages (500 tags).  For Plain/WithV templates one page
-        // is almost always sufficient, so we only fetch one page.
-        let max_pages: u32 = if matches!(tag_template, TagTemplate::Custom(_)) { 5 } else { 1 };
+        // or hit the safety cap of 10 pages (1000 tags).  nxp-qoriq/u-boot has ~400 tags
+        // before lf-* appears (page 4).  For Plain/WithV one page is sufficient.
+        let max_pages: u32 = if matches!(tag_template, TagTemplate::Custom(_)) { 10 } else { 1 };
         let mut tags: Vec<GithubTag> = Vec::new();
         let mut best_found = false;
         for page in 1..=max_pages {
@@ -575,6 +579,7 @@ impl UpstreamChecker {
                     Ok(t) => t,
                     Err(_) => break,
                 },
+                // Rate-limit or network error: stop fetching more pages but keep what we have
                 Err(_) => break,
             };
             let incomplete = page_tags.len() < 100;
@@ -2257,11 +2262,21 @@ fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
             let before_var = pattern.split("${VERSION}").next().unwrap_or("");
             let after_var = pattern.split("${VERSION}").nth(1).unwrap_or("");
             let mut v = tag.to_string();
-            if !before_var.is_empty() && v.starts_with(before_var) {
+            // If the tag does not match the expected prefix, it belongs to a different
+            // series (e.g. "v2022.01" vs "lf-${VERSION}").  Return "" so find_best_tag
+            // discards it (the first char won't be a digit).
+            if !before_var.is_empty() && !v.starts_with(before_var) {
+                return String::new();
+            }
+            if !before_var.is_empty() {
                 v = v[before_var.len()..].to_string();
             }
-            if !after_var.is_empty() && v.ends_with(after_var) {
-                v = v[..v.len() - after_var.len()].to_string();
+            if !after_var.is_empty() {
+                if v.ends_with(after_var) {
+                    v = v[..v.len() - after_var.len()].to_string();
+                } else {
+                    return String::new();
+                }
             }
             // If extracted version still uses underscores as separators (e.g. from
             // subst .,_,$(PKG_VERSION) patterns like curl-8_19_0 -> 8_19_0), convert back
@@ -2538,7 +2553,56 @@ pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 mod tests {
     use super::*;
     use crate::config::PkgRule;
-    use crate::makefile_parser::{ParsedMakefile, SourceType};
+    use crate::makefile_parser::{ParsedMakefile, SourceType, TagTemplate};
+
+    #[test]
+    fn test_parse_uboot_layerscape_makefile() {
+        use crate::makefile_parser::parse_makefile;
+        use std::path::Path;
+        let path = Path::new("/home/zag/OpenWrt/zagwrt/package/boot/uboot-layerscape/Makefile");
+        if !path.exists() { return; }
+        let parsed = parse_makefile(path).unwrap().unwrap();
+        eprintln!("pkg_name={}", parsed.pkg_name);
+        eprintln!("pkg_version={}", parsed.pkg_version);
+        eprintln!("pkg_source_version={:?}", parsed.pkg_source_version);
+        eprintln!("source_type={:?}", parsed.source_type);
+        eprintln!("effective_version={}", parsed.effective_version());
+        match &parsed.source_type {
+            SourceType::GitHubRelease { owner, repo, tag_template } => {
+                eprintln!("owner={} repo={} tag_template={:?}", owner, repo, tag_template);
+                assert_eq!(owner, "nxp-qoriq");
+                assert_eq!(repo, "u-boot");
+                assert!(matches!(tag_template, TagTemplate::Custom(p) if p == "lf-${VERSION}"),
+                    "expected Custom(lf-${{VERSION}}), got {:?}", tag_template);
+            }
+            other => panic!("expected GitHubRelease, got {:?}", other),
+        }
+        assert_eq!(parsed.effective_version(), "6.12.20.2.0.0");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_integration_uboot_layerscape_upstream() {
+        use crate::makefile_parser::parse_makefile;
+        use std::path::Path;
+        let token = std::env::var("GITHUB_TOKEN").ok();
+        println!("token_present={}", token.is_some());
+        let checker = UpstreamChecker::new(token.as_deref(), 60, 1).unwrap();
+        let path = Path::new("/home/zag/OpenWrt/zagwrt/package/boot/uboot-layerscape/Makefile");
+        let parsed = parse_makefile(path).unwrap().unwrap();
+        let info = checker.check(&parsed, &crate::config::PkgRule::default()).await;
+        println!("latest_version={:?}", info.latest_version);
+        println!("latest_tag={:?}", info.latest_tag);
+        println!("is_outdated={:?}", info.is_outdated);
+        println!("check_error={:?}", info.check_error);
+        println!("source_backend={}", info.source_backend);
+        assert!(info.latest_version.is_some(), "should find a latest version");
+        assert!(info.latest_tag.as_deref().map(|t| t.starts_with("lf-")).unwrap_or(false),
+            "latest_tag should start with lf-, got {:?}", info.latest_tag);
+        assert_eq!(info.latest_version.as_deref(), Some("6.18.2.1.0.0"),
+            "expected dot-normalised 6.18.2.1.0.0");
+    }
+
     use std::path::PathBuf;
 
     fn make_parsed(current: &str) -> ParsedMakefile {
