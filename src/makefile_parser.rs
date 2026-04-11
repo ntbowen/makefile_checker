@@ -141,8 +141,15 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
     let mut vars: HashMap<String, String> = HashMap::new();
 
     // Pass 1: collect variable definitions (:= = ?= +=)
-    // Also handle line continuations (trailing backslash)
+    // Also handle line continuations (trailing backslash).
+    //
+    // Conditional blocks (ifeq / ifdef / ifneq / ifndef … else … endif) are
+    // NOT evaluated — we cannot know which branch will be taken at build time.
+    // To get a stable, predictable result we only record assignments that are
+    // at the top level (depth == 0).  Assignments inside any conditional block
+    // are silently ignored; the top-level value is considered authoritative.
     let mut logical_line = String::new();
+    let mut cond_depth: usize = 0;  // nesting depth of ifeq/ifdef/ifneq/ifndef blocks
     for raw in content.lines() {
         if raw.ends_with('\\') {
             logical_line.push_str(raw.trim_end_matches('\\'));
@@ -151,24 +158,47 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
         } else {
             logical_line.push_str(raw);
         }
-        let line = logical_line.trim();
-        if !line.starts_with('#') && !line.is_empty() {
-            if let Some(caps) = RE_VAR_ASSIGN.captures(line) {
-                let key = caps[1].to_string();
-                let op  = caps[2].to_string();
-                let val = caps[3].trim().to_string();
-                match op.as_str() {
-                    "?=" => { vars.entry(key).or_insert(val); }
-                    "+="  => {
-                        let entry = vars.entry(key).or_default();
-                        if !entry.is_empty() { entry.push(' '); }
-                        entry.push_str(&val);
-                    }
-                    _ => { vars.insert(key, val); }
+        let line = logical_line.trim().to_string();
+        logical_line.clear();
+
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+
+        // Track conditional block depth
+        let lw = line.split_whitespace().next().unwrap_or("");
+        if matches!(lw, "ifeq" | "ifneq" | "ifdef" | "ifndef") {
+            cond_depth += 1;
+            continue;
+        }
+        if lw == "endif" {
+            cond_depth = cond_depth.saturating_sub(1);
+            continue;
+        }
+        if lw == "else" {
+            // else at the same depth — do not change depth
+            continue;
+        }
+
+        // Only process variable assignments at top level
+        if cond_depth > 0 {
+            continue;
+        }
+
+        if let Some(caps) = RE_VAR_ASSIGN.captures(&line) {
+            let key = caps[1].to_string();
+            let op  = caps[2].to_string();
+            let val = caps[3].trim().to_string();
+            match op.as_str() {
+                "?=" => { vars.entry(key).or_insert(val); }
+                "+="  => {
+                    let entry = vars.entry(key).or_default();
+                    if !entry.is_empty() { entry.push(' '); }
+                    entry.push_str(&val);
                 }
+                _ => { vars.insert(key, val); }
             }
         }
-        logical_line.clear();
     }
 
     // Inject defaults from well-known OpenWrt include files.
