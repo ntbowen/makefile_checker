@@ -242,10 +242,14 @@ pub fn save_report(
 
 fn row_data(r: &CheckResult, lang: Lang) -> Vec<String> {
     let info = &r.upstream;
-    let status = match info.is_outdated {
-        Some(true) => STATUS_OUTDATED.get(lang),
-        Some(false) => STATUS_OK.get(lang),
-        None => STATUS_UNKNOWN.get(lang),
+    let status = if info.format_mismatch {
+        STATUS_FORMAT_MISMATCH.get(lang)
+    } else {
+        match info.is_outdated {
+            Some(true) => STATUS_OUTDATED.get(lang),
+            Some(false) => STATUS_OK.get(lang),
+            None => STATUS_UNKNOWN.get(lang),
+        }
     };
     let tag_commit = match (&info.latest_tag, &info.latest_commit) {
         (Some(t), Some(c)) => format!("{} ({})", t, &c[..c.len().min(8)]),
@@ -347,16 +351,23 @@ fn save_xlsx(results: &[CheckResult], path: &Path, lang: Lang) -> Result<()> {
     let unknown_fmt = Format::new()
         .set_background_color(Color::RGB(0xFF_EB_9C))
         .set_font_color(Color::RGB(0x9C_65_00));
+    let format_mismatch_fmt = Format::new()
+        .set_background_color(Color::RGB(0xE8_D5_F5))
+        .set_font_color(Color::RGB(0x6A_0D_9A));
     let default_fmt = Format::new();
 
     for (row_idx, r) in results.iter().enumerate() {
         let row = (row_idx + 1) as u32;
         let data = row_data(r, lang);
 
-        let row_fmt = match r.upstream.is_outdated {
-            Some(true) => &outdated_fmt,
-            Some(false) => &ok_fmt,
-            None => &unknown_fmt,
+        let row_fmt = if r.upstream.format_mismatch {
+            &format_mismatch_fmt
+        } else {
+            match r.upstream.is_outdated {
+                Some(true) => &outdated_fmt,
+                Some(false) => &ok_fmt,
+                None => &unknown_fmt,
+            }
         };
 
         // Hash mismatch: override cell 7 with red if mismatched

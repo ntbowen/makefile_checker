@@ -401,7 +401,15 @@ impl UpstreamChecker {
         parsed: &ParsedMakefile,
     ) -> UpstreamInfo {
         if let Some(ref latest) = info.latest_version.clone() {
-            let current = parsed.effective_version();
+            // Use info.current_version (the display string already set by the
+            // check_ function) rather than parsed.effective_version() so that
+            // the format classification sees the same string the user sees.
+            // Fall back to parsed.effective_version() if current_version is empty.
+            let current = if info.current_version.is_empty() {
+                parsed.effective_version()
+            } else {
+                &info.current_version
+            };
             if versions_format_incompatible(current, latest) {
                 info.format_mismatch = true;
                 // Disable auto-update: clear all write fields
@@ -2227,7 +2235,10 @@ pub fn version_format_class(v: &str) -> u8 {
         Regex::new(r"^v?\d").unwrap()
     });
 
+    // Strip display suffix like " (64027ee9)" or " (some-commit)" appended by
+    // check_github_commit before classifying the version format.
     let v = v.trim();
+    let v = if let Some(pos) = v.find(" (") { v[..pos].trim() } else { v };
     if RE_HASH.is_match(v) {
         return 0;
     }
@@ -2648,6 +2659,12 @@ mod tests {
         assert_eq!(version_format_class("20261231"), 1);
         assert_eq!(version_format_class("2026.04"), 1, "YYYY.MM is calendar");
         assert_eq!(version_format_class("2025.01.15"), 1, "YYYY.MM.DD is calendar");
+        // Display strings with " (hash)" suffix must still be classified as date
+        assert_eq!(version_format_class("2023-06-11 (64027ee9)"), 1,
+            "date+hash display string should be classified as calendar");
+        assert_eq!(version_format_class("2024-03-22 (74bd9b60)"), 1,
+            "date+hash display string should be classified as calendar");
+        assert_eq!(version_format_class("2019-02-11 (259251e6)"), 1);
     }
 
     #[test]
@@ -2668,6 +2685,25 @@ mod tests {
             "semver vs calendar date must be incompatible");
         assert!(versions_format_incompatible("3.10.4", "2026-03-13"),
             "semver vs calendar date must be incompatible");
+    }
+
+    #[test]
+    fn test_format_compatible_date_plus_hash_display() {
+        // gnu-efi, psqlodbc, tac_plus, ztdns scenario:
+        // current and latest both have "YYYY-MM-DD (hash)" format → same class
+        assert!(!versions_format_incompatible(
+            "2023-06-11 (64027ee9)", "2024-03-22 (74bd9b60)"),
+            "date+hash vs date+hash must be compatible");
+        assert!(!versions_format_incompatible(
+            "2024-12-09 (20097cdf)", "2026-04-01 (863a0e93)"),
+            "psqlodbc date+hash must be compatible");
+        assert!(!versions_format_incompatible(
+            "2019-02-11 (259251e6)", "2025-08-22 (dd38c2d7)"),
+            "tac_plus date+hash must be compatible");
+        // ztdns: same commit hash → should be up-to-date, not mismatch
+        assert!(!versions_format_incompatible(
+            "2023-01-08 (1510cb47)", "2022-12-28 (1510cb47)"),
+            "same hash format must be compatible");
     }
 
     #[test]
