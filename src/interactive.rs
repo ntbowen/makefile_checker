@@ -538,10 +538,32 @@ async fn run_check(config: &Config, lang: Lang) -> Result<()> {
         println!("  {} {}", "✓".green(), SNAP_SAVED.get(lang));
     }
 
+    // ── Post-check: show format-mismatch packages (informational only) ──────
+    let fmt_mismatch: Vec<&CheckResult> = results
+        .iter()
+        .filter(|r| r.upstream.format_mismatch)
+        .collect();
+
+    if !fmt_mismatch.is_empty() {
+        println!("\n  {}\n", FORMAT_MISMATCH_HEADER.get(lang).magenta().bold());
+        for r in &fmt_mismatch {
+            let info = &r.upstream;
+            println!(
+                "  {}  {}  →  {}  ({})",
+                format!("{:<35}", info.pkg_name).yellow(),
+                info.current_version.dimmed(),
+                info.latest_version.as_deref().unwrap_or("?").magenta(),
+                FORMAT_MISMATCH_NOTE.get(lang).dimmed(),
+            );
+        }
+        println!();
+    }
+
     // ── Post-check: offer hash fetch and Makefile update for outdated packages ──
     let outdated: Vec<&CheckResult> = results
         .iter()
-        .filter(|r| r.upstream.is_outdated == Some(true))
+        // Exclude format_mismatch packages: they cannot be safely auto-updated
+        .filter(|r| r.upstream.is_outdated == Some(true) && !r.upstream.format_mismatch)
         .collect();
 
     if !outdated.is_empty() {

@@ -49,24 +49,32 @@ pub fn print_results_table(results: &[CheckResult], lang: Lang) {
     let mut up_to_date = 0usize;
     let mut unknown = 0usize;
     let mut hash_mismatches = 0usize;
+    let mut format_mismatches = 0usize;
 
     for r in results {
         let info = &r.upstream;
 
-        let status_cell = match info.is_outdated {
-            Some(true) => {
-                outdated += 1;
-                Cell::new(STATUS_OUTDATED.get(lang))
-                    .fg(Color::Red)
-                    .add_attribute(Attribute::Bold)
-            }
-            Some(false) => {
-                up_to_date += 1;
-                Cell::new(STATUS_OK.get(lang)).fg(Color::Green)
-            }
-            None => {
-                unknown += 1;
-                Cell::new(STATUS_UNKNOWN.get(lang)).fg(Color::Yellow)
+        let status_cell = if info.format_mismatch {
+            format_mismatches += 1;
+            Cell::new(STATUS_FORMAT_MISMATCH.get(lang))
+                .fg(Color::Magenta)
+                .add_attribute(Attribute::Bold)
+        } else {
+            match info.is_outdated {
+                Some(true) => {
+                    outdated += 1;
+                    Cell::new(STATUS_OUTDATED.get(lang))
+                        .fg(Color::Red)
+                        .add_attribute(Attribute::Bold)
+                }
+                Some(false) => {
+                    up_to_date += 1;
+                    Cell::new(STATUS_OK.get(lang)).fg(Color::Green)
+                }
+                None => {
+                    unknown += 1;
+                    Cell::new(STATUS_UNKNOWN.get(lang)).fg(Color::Yellow)
+                }
             }
         };
 
@@ -114,6 +122,13 @@ pub fn print_results_table(results: &[CheckResult], lang: Lang) {
         unknown.to_string().yellow(),
         SUMMARY_UNKNOWN_CNT.get(lang).yellow(),
     );
+    if format_mismatches > 0 {
+        print!(
+            "  {} {}",
+            format_mismatches.to_string().magenta().bold(),
+            SUMMARY_FORMAT_MISMATCH_CNT.get(lang).magenta(),
+        );
+    }
     if hash_mismatches > 0 {
         print!(
             "  {} {}",

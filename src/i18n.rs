@@ -126,6 +126,7 @@ pub const TBL_NOTE: T = T("Note", "备注");
 pub const STATUS_OUTDATED: T = T("OUTDATED", "有更新");
 pub const STATUS_OK: T = T("OK", "最新");
 pub const STATUS_UNKNOWN: T = T("?", "?");
+pub const STATUS_FORMAT_MISMATCH: T = T("FORMAT?", "格式不一致");
 
 // Summary
 pub const SUMMARY_ALL_OK: T = T("All packages are up-to-date!", "所有包均为最新版本！");
@@ -134,6 +135,7 @@ pub const SUMMARY_CHECKED: T = T("packages checked:", "个包已检查：");
 pub const SUMMARY_OUTDATED_CNT: T = T("outdated", "个有更新");
 pub const SUMMARY_OK_CNT: T = T("up-to-date", "个已最新");
 pub const SUMMARY_UNKNOWN_CNT: T = T("unknown", "个未知");
+pub const SUMMARY_FORMAT_MISMATCH_CNT: T = T("format-mismatch", "个格式不一致");
 
 // Save
 pub const SAVE_XLSX: T = T("Saved XLSX:", "已保存 XLSX：");
@@ -229,6 +231,16 @@ pub const CFG_DL_PATH: T = T(
 pub const CFG_FETCH_HASH: T = T(
     "Fetch upstream tarball SHA-256 hash for outdated packages?",
     "对有更新的包下载上游源码并计算 SHA-256？",
+);
+
+// Post-check: format-mismatch notice
+pub const FORMAT_MISMATCH_HEADER: T = T(
+    "─── Version format mismatch (skipped from auto-update) ───",
+    "─── 版本格式不一致（已跳过自动更新） ───",
+);
+pub const FORMAT_MISMATCH_NOTE: T = T(
+    "current and latest use incompatible versioning schemes — manual review required",
+    "当前版本与最新版本格式不兼容，需人工检查后再更新",
 );
 
 // Post-check: outdated packages action menu

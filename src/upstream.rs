@@ -42,6 +42,12 @@ pub struct UpstreamInfo {
     pub write_pkg_source_version: Option<String>,
     /// Value to write into PKG_SOURCE_DATE (YYYY-MM-DD)
     pub write_pkg_source_date: Option<String>,
+
+    /// Version format mismatch: current and latest use incompatible versioning
+    /// schemes (e.g. semver vs calendar date, or commit hash vs semver).
+    /// When true the package must NOT be auto-updated and must be shown with
+    /// STATUS_FORMAT_MISMATCH in the report instead of OUTDATED / OK.
+    pub format_mismatch: bool,
 }
 
 // ─────────────────────── API response structs ─────────────────────────────
@@ -180,6 +186,7 @@ impl UpstreamChecker {
                 write_pkg_version: None,
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             },
         };
         // PKG_HASH verification: only when NOT outdated (current tarball)
@@ -361,22 +368,49 @@ impl UpstreamChecker {
         };
 
         // Repology → Anitya fallback chain: try if primary gave no version
-        match result {
+        let result = match result {
             Ok(ref info) if info.latest_version.is_none() && info.check_error.is_some() => {
                 if let Ok(repology) = self.check_repology(parsed).await {
                     if repology.latest_version.is_some() {
-                        return Ok(repology);
+                        return Ok(self.finalize_format_mismatch(repology, parsed));
                     }
                 }
                 if let Ok(anitya) = self.check_anitya(parsed).await {
                     if anitya.latest_version.is_some() {
-                        return Ok(anitya);
+                        return Ok(self.finalize_format_mismatch(anitya, parsed));
                     }
                 }
                 result
             }
             other => other,
+        };
+
+        // Set format_mismatch flag and clear write fields when formats diverge
+        match result {
+            Ok(info) => Ok(self.finalize_format_mismatch(info, parsed)),
+            err => err,
         }
+    }
+
+    /// Post-process a finished UpstreamInfo: detect version format mismatch
+    /// between current and latest, set `format_mismatch = true` and clear the
+    /// write fields so the package cannot be auto-updated.
+    fn finalize_format_mismatch(
+        &self,
+        mut info: UpstreamInfo,
+        parsed: &ParsedMakefile,
+    ) -> UpstreamInfo {
+        if let Some(ref latest) = info.latest_version.clone() {
+            let current = parsed.effective_version();
+            if versions_format_incompatible(current, latest) {
+                info.format_mismatch = true;
+                // Disable auto-update: clear all write fields
+                info.write_pkg_version = None;
+                info.write_pkg_source_version = None;
+                info.write_pkg_source_date = None;
+            }
+        }
+        info
     }
 
     // ── GitHub API helper: sends request and converts 403/429 to diagnostic errors ──
@@ -448,6 +482,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -495,6 +530,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -570,6 +606,7 @@ impl UpstreamChecker {
                 write_pkg_version: None,
                 write_pkg_source_version: Some(latest.sha.clone()),
                 write_pkg_source_date: Some(commit_date.clone()),
+                format_mismatch: false,
             });
         }
 
@@ -624,6 +661,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -702,6 +740,7 @@ impl UpstreamChecker {
                 write_pkg_version: None,
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -748,6 +787,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(v),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -791,6 +831,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -837,6 +878,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -894,6 +936,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -947,6 +990,7 @@ impl UpstreamChecker {
                 write_pkg_version: None,
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -995,6 +1039,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -1060,6 +1105,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -1103,6 +1149,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -1150,6 +1197,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -1202,6 +1250,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -1248,6 +1297,7 @@ impl UpstreamChecker {
             write_pkg_version: Some(version),
             write_pkg_source_version: None,
             write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -1303,6 +1353,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(v),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -1328,6 +1379,7 @@ impl UpstreamChecker {
             write_pkg_version: None,
             write_pkg_source_version: None,
             write_pkg_source_date: None,
+                format_mismatch: false,
         }
     }
 
@@ -1386,6 +1438,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(v),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -1434,6 +1487,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -1494,6 +1548,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
                         });
                     }
                 }
@@ -1525,6 +1580,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(v),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -1581,6 +1637,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -1625,6 +1682,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
         })
     }
 
@@ -1673,6 +1731,7 @@ impl UpstreamChecker {
                 write_pkg_version: Some(version),
                 write_pkg_source_version: None,
                 write_pkg_source_date: None,
+                format_mismatch: false,
             });
         }
 
@@ -2058,27 +2117,75 @@ fn canonicalize_prerelease(v: &str) -> String {
     }
 }
 
-/// Simple version comparison: returns true if `latest` is newer than `current`.
-pub fn compare_versions(current: &str, latest: &str) -> bool {
-    // Guard: if the two version strings belong to completely different numbering
-    // schemes (e.g. current="6.12.20.2.0.0" vs latest="2022.01" — a vendor LTS
-    // branch vs upstream calendar versioning), numeric comparison produces
-    // nonsensical results.  Detect this by comparing the magnitude of the first
-    // numeric segment: if they differ by more than 4× we consider them
-    // incomparable and return false (treat as "up-to-date / unknown").
-    fn first_numeric(s: &str) -> Option<u64> {
-        s.trim_start_matches(|c: char| !c.is_ascii_digit())
-            .split(|c: char| !c.is_ascii_digit())
-            .find_map(|p| if p.is_empty() { None } else { p.parse().ok() })
+/// Classify a version string into a broad format family for compatibility checks.
+///
+/// Returns a u8 tag:
+///   0 = commit hash (hex 12-40 chars)
+///   1 = calendar date  YYYY-MM-DD  or  YYYY.MM  or  YYYYMMDD
+///   2 = semantic / numeric  (1.2.3,  v4.0,  2013.10-style u-boot releases, …)
+///   3 = unknown / mixed
+pub fn version_format_class(v: &str) -> u8 {
+    use std::sync::LazyLock;
+    use regex::Regex;
+    // commit hash: 12-40 lowercase hex chars
+    static RE_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{12,40}$").unwrap());
+    // calendar date variants
+    static RE_DATE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:\d{4}-\d{2}-\d{2}|\d{8})$").unwrap()
+    });
+    // numeric / semver: starts with optional v then digit(s)
+    static RE_SEMVER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^v?\d").unwrap()
+    });
+
+    let v = v.trim();
+    if RE_HASH.is_match(v) {
+        return 0;
     }
-    if let (Some(c0), Some(l0)) = (first_numeric(current), first_numeric(latest)) {
-        // If both values are > 0 and one is > 4× the other, skip comparison
-        if c0 > 0 && l0 > 0 {
-            let ratio = if c0 > l0 { c0 / l0 } else { l0 / c0 };
-            if ratio > 4 {
-                return false;
+    if RE_DATE.is_match(v) {
+        return 1;
+    }
+    if RE_SEMVER.is_match(v) {
+        // Distinguish between pure calendar-year-based (YYYY.MM…) and
+        // semantic versions by checking whether the leading number looks
+        // like a 4-digit year >= 2000.
+        let leading = v.trim_start_matches('v')
+            .split(|c: char| !c.is_ascii_digit())
+            .next().unwrap_or("");
+        if let Ok(n) = leading.parse::<u64>() {
+            if n >= 2000 && n <= 2099 {
+                return 1;   // calendar / date-based (e.g. 2026-03-13, 2026.04)
             }
         }
+        return 2;   // semver / numeric
+    }
+    3
+}
+
+/// Returns true when `current` and `latest` use incompatible versioning schemes
+/// (e.g. semver vs date, commit hash vs date, etc.) so that numeric comparison
+/// would be meaningless.
+pub fn versions_format_incompatible(current: &str, latest: &str) -> bool {
+    let cf = version_format_class(current);
+    let lf = version_format_class(latest);
+    // Same class → compatible
+    if cf == lf {
+        return false;
+    }
+    // Both numeric/semver (class 2) vs date/calendar (class 1) → incompatible
+    // commit hash (0) mixed with anything else → incompatible
+    // unknown (3) mixed with anything → incompatible
+    true
+}
+
+/// Simple version comparison: returns true if `latest` is newer than `current`.
+/// Returns false (not outdated) when the two formats are incompatible — callers
+/// should check `versions_format_incompatible` first to distinguish "up-to-date"
+/// from "format mismatch".
+pub fn compare_versions(current: &str, latest: &str) -> bool {
+    // If formats are incompatible, comparison is meaningless → not outdated
+    if versions_format_incompatible(current, latest) {
+        return false;
     }
 
     let cv = normalize_version(current);
@@ -2204,6 +2311,7 @@ mod tests {
             write_pkg_version: Some(latest.to_string()),
             write_pkg_source_version: None,
             write_pkg_source_date: None,
+                format_mismatch: false,
         }
     }
 
@@ -2432,5 +2540,59 @@ mod tests {
         apply_rule(&mut info, &rule, &parsed);
         assert_eq!(info.latest_version.as_deref(), Some("3.0.0-beta.1"));
         assert_eq!(info.is_outdated, Some(false), "should NOT be outdated");
+    }
+
+    // ── version_format_class ─────────────────────────────────────────────
+
+    #[test]
+    fn test_format_class_commit_hash() {
+        assert_eq!(version_format_class("c123c68d1f5b13a55a8e164b03be866491ce3049"), 0, "40-char SHA");
+        assert_eq!(version_format_class("404846dd2838"), 0, "12-char short hash");
+        // 8-char hex is too short to be reliably classified as a commit hash;
+        // the classifier returns 3 (unknown) for it — that is intentional.
+        assert_eq!(version_format_class("cd5610ba"), 3, "8-char hex = ambiguous, not classified as hash");
+    }
+
+    #[test]
+    fn test_format_class_calendar_date() {
+        assert_eq!(version_format_class("2026-03-13"), 1);
+        assert_eq!(version_format_class("20261231"), 1);
+        assert_eq!(version_format_class("2026.04"), 1, "YYYY.MM is calendar");
+        assert_eq!(version_format_class("2025.01.15"), 1, "YYYY.MM.DD is calendar");
+    }
+
+    #[test]
+    fn test_format_class_semver() {
+        assert_eq!(version_format_class("v4.0.10"), 2);
+        assert_eq!(version_format_class("3.10.4"), 2);
+        assert_eq!(version_format_class("1.2.3"), 2);
+        // u-boot uses YYYY.MM but year >= 2000 -> calendar class
+        assert_eq!(version_format_class("2013.10"), 1, "u-boot 2013.10 is calendar");
+    }
+
+    // ── versions_format_incompatible ─────────────────────────────────────
+
+    #[test]
+    fn test_format_incompatible_semver_vs_date() {
+        // at91bootstrap scenario: v4.0.10 (semver) vs 2026-03-13 (date)
+        assert!(versions_format_incompatible("v4.0.10", "2026-03-13"),
+            "semver vs calendar date must be incompatible");
+        assert!(versions_format_incompatible("3.10.4", "2026-03-13"),
+            "semver vs calendar date must be incompatible");
+    }
+
+    #[test]
+    fn test_format_compatible_same_class() {
+        assert!(!versions_format_incompatible("1.2.3", "1.2.4"), "semver vs semver ok");
+        assert!(!versions_format_incompatible("2026.01", "2026.04"), "calendar vs calendar ok");
+        assert!(!versions_format_incompatible("2026-01-01", "2026-03-13"), "date vs date ok");
+    }
+
+    #[test]
+    fn test_compare_versions_incompatible_returns_false() {
+        // Must NOT report "outdated" when formats differ
+        assert!(!compare_versions("v4.0.10", "2026-03-13"),
+            "semver current vs calendar latest must not be outdated");
+        assert!(!compare_versions("3.10.4", "2026-03-13"));
     }
 }
