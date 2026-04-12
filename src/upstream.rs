@@ -1533,6 +1533,8 @@ impl UpstreamChecker {
         struct AnityaProject {
             latest_version: Option<String>,
             version: Option<String>,
+            #[serde(default)]
+            homepage: Option<String>,
         }
 
         let resp: AnityaResp = self
@@ -1542,8 +1544,30 @@ impl UpstreamChecker {
             .error_for_status().context("anitya HTTP error")?
             .json().await.context("parse anitya JSON")?;
 
-        let version = resp.items.iter()
-            .find_map(|p| p.latest_version.clone().or_else(|| p.version.clone()));
+        // When multiple projects share the same name (e.g. "slang" matches
+        // shader-slang, pypi/slang, and jedsoft slang), prefer the one whose
+        // homepage domain overlaps with PKG_SOURCE_URL.  Fall back to the first
+        // item only when no homepage match is found.
+        let source_host: Option<String> = parsed.source_urls.first()
+            .or(parsed.source_url.as_ref())
+            .and_then(|u| url::Url::parse(u).ok())
+            .and_then(|u| u.host_str().map(|h| h.to_lowercase()));
+
+        let best = if let Some(ref host) = source_host {
+            resp.items.iter()
+                .find(|p| {
+                    p.homepage.as_deref()
+                        .and_then(|h| url::Url::parse(h).ok())
+                        .and_then(|u| u.host_str().map(|s| s.to_lowercase()))
+                        .map(|h| h.contains(host.as_str()) || host.contains(h.as_str()))
+                        .unwrap_or(false)
+                })
+                .or_else(|| resp.items.first())
+        } else {
+            resp.items.first()
+        };
+
+        let version = best.and_then(|p| p.latest_version.clone().or_else(|| p.version.clone()));
 
         if let Some(v) = version {
             let is_outdated = compare_versions(parsed.effective_version(), &v);
