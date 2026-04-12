@@ -609,6 +609,25 @@ impl UpstreamChecker {
             // '6.18.2-1.0.0' (treated as semver pre-release) are compared correctly
             // against the dot-separated PKG_VERSION '6.12.20.2.0.0'.
             let is_outdated = compare_versions(parsed.effective_version(), &write_ver);
+            // If the package uses PKG_SOURCE_VERSION for git checkout (e.g. lua-openssl
+            // where PKG_VERSION=$(subst -,.,$(PKG_SOURCE_VERSION))), the tag name itself
+            // is what should go into PKG_SOURCE_VERSION even for Plain/WithV templates.
+            // In that case do NOT write PKG_VERSION directly because it is a derived
+            // expression ($(subst ...)) that the updater would overwrite with a literal.
+            let has_src_ver = parsed.pkg_source_version.is_some();
+            let effective_src_ver = write_src_ver.or_else(|| {
+                if has_src_ver {
+                    Some(tag.name.clone())
+                } else {
+                    None
+                }
+            });
+            let effective_pkg_ver = if has_src_ver && effective_src_ver.is_some() {
+                // PKG_VERSION is derived from PKG_SOURCE_VERSION — don't overwrite it
+                None
+            } else {
+                Some(write_ver.clone())
+            };
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
@@ -622,8 +641,8 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-tags".to_string(),
                 hash_mismatch: None,
-                write_pkg_version: Some(write_ver),
-                write_pkg_source_version: write_src_ver,
+                write_pkg_version: effective_pkg_ver,
+                write_pkg_source_version: effective_src_ver,
                 write_pkg_source_date: None,
                 format_mismatch: false,
                 is_newer: false,

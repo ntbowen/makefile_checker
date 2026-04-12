@@ -1252,8 +1252,30 @@ fn detect_tag_template(ref_part: &str, pkg_version: &str) -> TagTemplate {
         }
     }
 
+    // Some packages like lua-openssl use PKG_VERSION=$(subst -,.,$(PKG_SOURCE_VERSION))
+    // so the tag is the pkg_version with dots replaced by hyphens (or vice-versa).
+    // e.g. PKG_VERSION=0.10.0.0, tag=0.10.0-0  (last dot -> hyphen)
+    // These are plain tags; we can detect them by checking if the numeric segments match.
+    {
+        let tag_dots = ref_part.replace('-', ".");
+        if tag_dots == pkg_version {
+            return TagTemplate::Plain;
+        }
+        let ver_hyphens = pkg_version.replace('.', "-");
+        if ref_part == ver_hyphens {
+            return TagTemplate::Plain;
+        }
+    }
+
     // Generic custom template: e.g. "release-1.2.3" or "liburing-2.14" or "app/v1.2.3"
-    TagTemplate::Custom(ref_part.replace(pkg_version, "${VERSION}"))
+    // Only emit a Custom template when pkg_version actually appears inside ref_part so
+    // the placeholder is meaningful; otherwise fall back to Plain.
+    let replaced = ref_part.replace(pkg_version, "${VERSION}");
+    if replaced.contains("${VERSION}") {
+        TagTemplate::Custom(replaced)
+    } else {
+        TagTemplate::Plain
+    }
 }
 
 // ──────────────────────────── compiled regexes ────────────────────────────
@@ -1465,6 +1487,29 @@ mod tests {
             assert_eq!(repo, "tini");
             assert!(matches!(tag_template, TagTemplate::WithV));
         }
+    }
+
+    #[test]
+    fn test_lua_openssl_hyphen_version_tag() {
+        // lua-openssl: PKG_SOURCE_VERSION=0.10.0-0, PKG_VERSION=$(subst -,.,$(PKG_SOURCE_VERSION))=0.10.0.0
+        // Tag is "0.10.0-0" which is PKG_VERSION with last dot replaced by hyphen.
+        // detect_tag_template must return Plain so find_best_tag matches "0.11.0-3" etc.
+        let tmpl = detect_tag_template("0.10.0-0", "0.10.0.0");
+        assert!(
+            matches!(tmpl, TagTemplate::Plain),
+            "expected Plain but got {:?}", tmpl
+        );
+    }
+
+    #[test]
+    fn test_detect_tag_template_no_placeholder_falls_back_to_plain() {
+        // When pkg_version does not appear inside ref_part, the last-resort Custom()
+        // would produce a template without ${VERSION} which is useless.  Should be Plain.
+        let tmpl = detect_tag_template("some-unrelated-tag", "1.2.3");
+        assert!(
+            matches!(tmpl, TagTemplate::Plain),
+            "expected Plain fallback but got {:?}", tmpl
+        );
     }
 
     #[test]
