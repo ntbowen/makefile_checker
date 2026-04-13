@@ -329,7 +329,12 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
                             repo,
                             commit: ver.clone(),
                         };
-                    } else {
+                    }
+                    // Path-based tag: e.g. client_release/8.0/8.0.4 (BOINC style)
+                    if let Some(tag_path) = detect_path_tag_prefix(ver, &pkg_version) {
+                        return SourceType::GitHubTagPath { owner, repo, tag_path };
+                    }
+                    {
                         // Tag-like version string (e.g. mc_release_10.39.0)
                         let tag_template = detect_tag_template(ver, &pkg_version);
                         return SourceType::GitHubRelease { owner, repo, tag_template };
@@ -428,10 +433,13 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
                 if let Some(ver) = &pkg_source_version {
                     if RE_COMMIT_HASH.is_match(ver) {
                         return SourceType::GitHubCommit { owner, repo, commit: ver.clone() };
-                    } else {
-                        let tag_template = detect_tag_template(ver, &pkg_version);
-                        return SourceType::GitHubRelease { owner, repo, tag_template };
                     }
+                    // Path-based tag: e.g. client_release/8.0/8.0.4 (BOINC style)
+                    if let Some(tag_path) = detect_path_tag_prefix(ver, &pkg_version) {
+                        return SourceType::GitHubTagPath { owner, repo, tag_path };
+                    }
+                    let tag_template = detect_tag_template(ver, &pkg_version);
+                    return SourceType::GitHubRelease { owner, repo, tag_template };
                 }
                 return SourceType::GitHubRelease {
                     owner,
@@ -1025,6 +1033,11 @@ fn detect_source_type(
             };
         }
 
+        // Path-based tag: e.g. client_release/8.0/8.0.4 (BOINC style)
+        if let Some(tag_path) = detect_path_tag_prefix(&ref_part, pkg_version) {
+            return SourceType::GitHubTagPath { owner, repo, tag_path };
+        }
+
         // Direct tag reference: v<version>, <version>, or <prefix>-<version>
         let tag_template = detect_tag_template(&ref_part, pkg_version);
         return SourceType::GitHubRelease {
@@ -1194,6 +1207,34 @@ fn detect_source_type(
     }
 
     SourceType::Unknown
+}
+
+/// Detect whether `ref_part` is a hierarchical path tag like `client_release/8.0/8.0.4`
+/// where the last segment equals `pkg_version` and the segment before it is version-dependent.
+/// Returns `Some("client_release/")` (stable prefix with trailing slash) when detected,
+/// or `None` when the ref is a plain tag.
+fn detect_path_tag_prefix(ref_part: &str, pkg_version: &str) -> Option<String> {
+    if !ref_part.contains('/') {
+        return None;
+    }
+    let last_seg = ref_part.rsplit('/').next()?;
+    if last_seg != pkg_version {
+        return None;
+    }
+    let without_ver = ref_part[..ref_part.len() - last_seg.len()].trim_end_matches('/');
+    // If the remaining path ends with a numeric-looking segment (e.g. "8.0"), strip it too
+    // so we get a stable prefix like "client_release" instead of "client_release/8.0".
+    let stable_prefix = if let Some(p) = without_ver.rfind('/') {
+        let mid = &without_ver[p + 1..];
+        if mid.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            &without_ver[..p]
+        } else {
+            without_ver
+        }
+    } else {
+        without_ver
+    };
+    Some(format!("{}/", stable_prefix))
 }
 
 fn detect_tag_template(ref_part: &str, pkg_version: &str) -> TagTemplate {
@@ -1487,6 +1528,31 @@ mod tests {
             assert_eq!(repo, "tini");
             assert!(matches!(tag_template, TagTemplate::WithV));
         }
+    }
+
+    #[test]
+    fn test_boinc_path_tag_detected_as_tag_path() {
+        // boinc: PKG_SOURCE_URL=https://github.com/BOINC/boinc (bare, no .git)
+        //        PKG_SOURCE_VERSION=client_release/8.0/8.0.4
+        //        PKG_VERSION=8.0.4
+        // Should be GitHubTagPath with tag_path="client_release/"
+        // so that client_release/8.2/8.2.9 is found as latest.
+        let content = "\
+PKG_NAME:=boinc\n\
+PKG_VERSION:=8.0.4\n\
+PKG_RELEASE:=1\n\
+PKG_SOURCE_PROTO:=git\n\
+PKG_SOURCE_URL:=https://github.com/BOINC/boinc\n\
+PKG_SOURCE_VERSION:=client_release/8.0/8.0.4\n\
+PKG_MIRROR_HASH:=abc123\n";
+        let tmp = std::env::temp_dir().join("boinc_test_Makefile");
+        std::fs::write(&tmp, content).unwrap();
+        let parsed = parse_makefile(&tmp).unwrap().unwrap();
+        assert!(
+            matches!(&parsed.source_type, SourceType::GitHubTagPath { owner, repo, tag_path }
+                if owner == "BOINC" && repo == "boinc" && tag_path == "client_release/"),
+            "expected GitHubTagPath with tag_path=client_release/, got {:?}", parsed.source_type
+        );
     }
 
     #[test]

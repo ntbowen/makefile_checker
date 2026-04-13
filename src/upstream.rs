@@ -832,7 +832,7 @@ impl UpstreamChecker {
         let upstream_url = format!("https://github.com/{}/{}/tags", owner, repo);
 
         let tags: Vec<GithubTag> = self
-            .github_send(self.github_client.get(&api_url).query(&[("per_page", "30")])).await?
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "100")])).await?
             .json().await.context("parse tags JSON")?;
 
         let prefix = tag_path_prefix.trim_end_matches('/');
@@ -2341,7 +2341,15 @@ fn extract_version_from_prefixed_tag(tag: &str, prefix: &str) -> String {
     for sep in &['/', '-'] {
         let pref = format!("{}{}", prefix, sep);
         if tag.starts_with(&pref) {
-            return tag[pref.len()..].trim_start_matches(|c| c == 'v' || c == 'V').to_string();
+            let rest = tag[pref.len()..].trim_start_matches(|c| c == 'v' || c == 'V');
+            // If rest still contains '/', the tag is a hierarchical path like
+            // client_release/8.2/8.2.9 — take only the last segment as the version.
+            let ver = if rest.contains('/') {
+                rest.rsplit('/').next().unwrap_or(rest)
+            } else {
+                rest
+            };
+            return ver.to_string();
         }
     }
     // Try prefix directly concatenated with the version (e.g. prefix="V/", tag="V0.21.00")
