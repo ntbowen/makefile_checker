@@ -442,6 +442,12 @@ impl UpstreamChecker {
         mut info: UpstreamInfo,
         parsed: &ParsedMakefile,
     ) -> UpstreamInfo {
+        // For commit-tracked packages, PKG_VERSION is an arbitrary human string
+        // (e.g. "3.3") unrelated to upstream versioning.  Outdatedness is
+        // determined by SHA equality, not version format, so skip format checking.
+        if info.source_backend == "github-commit" {
+            return info;
+        }
         if let Some(ref latest) = info.latest_version.clone() {
             // Use info.current_version (the display string already set by the
             // check_ function) rather than parsed.effective_version() so that
