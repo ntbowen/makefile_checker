@@ -2239,7 +2239,7 @@ fn tag_write_fields(
     template: &TagTemplate,
 ) -> (String, Option<String>) {
     match template {
-        TagTemplate::WithV => (format!("v{}", version), None),
+        TagTemplate::WithV => (version.to_string(), None),
         TagTemplate::Plain => (version.to_string(), None),
         TagTemplate::Custom(pattern) => {
             // Check if this is a prefix template (e.g. "lf-${VERSION}", "RELEASE-${VERSION}")
