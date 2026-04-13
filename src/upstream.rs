@@ -505,16 +505,24 @@ impl UpstreamChecker {
 
         // If the releases API fails (404, rate-limit, etc.) fall through to the tags API.
         let releases: Vec<GithubRelease> = match self
-            .github_send(self.github_client.get(&api_url).query(&[("per_page", "20")])).await
+            .github_send(self.github_client.get(&api_url).query(&[("per_page", "100")])).await
         {
             Ok(resp) => resp.json().await.unwrap_or_default(),
             Err(_) => vec![],
         };
 
-        // Skip prerelease, draft, and pre-release tags (rc/alpha/beta/dev)
+        // Skip prerelease, draft, and pre-release tags (rc/alpha/beta/dev).
+        // Also skip releases whose tag does not match the expected template
+        // (e.g. noports has desktop/*, srv/*, etc. alongside c/* releases).
         let latest = releases
             .iter()
-            .find(|r| !r.prerelease && !r.draft && !is_prerelease_tag(&r.tag_name));
+            .find(|r| {
+                if r.prerelease || r.draft || is_prerelease_tag(&r.tag_name) {
+                    return false;
+                }
+                let v = extract_version_from_tag(&r.tag_name, tag_template);
+                v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            });
 
         if let Some(rel) = latest {
             let tag = rel.tag_name.clone();

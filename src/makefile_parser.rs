@@ -1531,6 +1531,18 @@ mod tests {
     }
 
     #[test]
+    fn test_csshnpd_c_prefix_tag_template() {
+        // csshnpd: PKG_SOURCE_URL=.../releases/download/c$(PKG_VERSION)
+        // After expansion tag_ref = "c1.0.17", PKG_VERSION = "1.0.17"
+        // Should be Custom("c${VERSION}") so that only c-prefixed releases are matched.
+        let tmpl = detect_tag_template("c1.0.17", "1.0.17");
+        assert!(
+            matches!(&tmpl, TagTemplate::Custom(p) if p == "c${VERSION}"),
+            "expected Custom(\"c${{VERSION}}\") but got {:?}", tmpl
+        );
+    }
+
+    #[test]
     fn test_boinc_path_tag_detected_as_tag_path() {
         // boinc: PKG_SOURCE_URL=https://github.com/BOINC/boinc (bare, no .git)
         //        PKG_SOURCE_VERSION=client_release/8.0/8.0.4
