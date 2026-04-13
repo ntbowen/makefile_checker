@@ -2456,9 +2456,9 @@ pub fn version_format_class(v: &str) -> u8 {
     use regex::Regex;
     // commit hash: 12-40 lowercase hex chars
     static RE_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{12,40}$").unwrap());
-    // calendar date variants
+    // calendar date variants: YYYY-MM-DD, YYYYMMDD, or YYYYMMDD.N (e.g. 20260101.0)
     static RE_DATE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?:\d{4}-\d{2}-\d{2}|\d{8})$").unwrap()
+        Regex::new(r"^(?:\d{4}-\d{2}-\d{2}|\d{8}(?:\.\d+)?)$").unwrap()
     });
     // numeric / semver: starts with optional v then digit(s)
     static RE_SEMVER: LazyLock<Regex> = LazyLock::new(|| {
