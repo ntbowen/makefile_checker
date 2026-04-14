@@ -2289,7 +2289,19 @@ fn strip_tag_prefix(s: &str) -> String {
 
 fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
     match template {
-        TagTemplate::WithV => strip_tag_prefix(tag.trim_start_matches('v')),
+        TagTemplate::WithV => {
+            // Only accept tags of the form v<version> where <version> starts
+            // with a digit.  Do NOT use strip_tag_prefix here — it would
+            // extract "15" from "linux-client-v15" which doesn't match WithV.
+            let stripped = tag.trim_start_matches(|c| c == 'v' || c == 'V');
+            if stripped.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                && stripped.len() < tag.len()  // at least one v/V was stripped
+            {
+                stripped.to_string()
+            } else {
+                String::new()  // not a v<version> tag → rejected by find_best_tag
+            }
+        }
         TagTemplate::Plain => strip_tag_prefix(tag),
         TagTemplate::Custom(pattern) => {
             // Handle VERSION_NODOT: dots were stripped from version (subst .,,)
@@ -2512,14 +2524,34 @@ pub fn version_format_class(v: &str) -> u8 {
 pub fn versions_format_incompatible(current: &str, latest: &str) -> bool {
     let cf = version_format_class(current);
     let lf = version_format_class(latest);
-    // Same class → compatible
-    if cf == lf {
-        return false;
+    // Same class → compatible (but see dot-count check below)
+    if cf != lf {
+        // Both numeric/semver (class 2) vs date/calendar (class 1) → incompatible
+        // commit hash (0) mixed with anything else → incompatible
+        // unknown (3) mixed with anything → incompatible
+        return true;
     }
-    // Both numeric/semver (class 2) vs date/calendar (class 1) → incompatible
-    // commit hash (0) mixed with anything else → incompatible
-    // unknown (3) mixed with anything → incompatible
-    true
+    // Both class 2 (semver/numeric): check for integer-to-semver transition.
+    // A single-segment integer (e.g. "15") mixed with a multi-segment version
+    // (e.g. "0.2.20251017") means the project switched versioning schemes.
+    // Numeric comparison would be wrong (0 < 15), so flag as incompatible.
+    if cf == 2 {
+        fn strip_v(v: &str) -> &str {
+            v.trim_start_matches('v').trim_start_matches('V')
+        }
+        fn is_single_int(v: &str) -> bool {
+            strip_v(v).chars().all(|c| c.is_ascii_digit())
+        }
+        let c_dots = strip_v(current).matches('.').count();
+        let l_dots = strip_v(latest).matches('.').count();
+        // If one side is a bare integer and the other has dots, incompatible
+        if (c_dots == 0 && l_dots >= 2 && is_single_int(current))
+            || (l_dots == 0 && c_dots >= 2 && is_single_int(latest))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Simple version comparison: returns true if `latest` is newer than `current`.
@@ -2619,6 +2651,30 @@ mod tests {
     use super::*;
     use crate::config::PkgRule;
     use crate::makefile_parser::{ParsedMakefile, SourceType, TagTemplate};
+
+    #[test]
+    fn test_withv_rejects_compound_prefix_tag() {
+        // ovpn-dco has tags like "linux-client-v15" alongside "v0.2.20251017".
+        // WithV must NOT extract "15" from "linux-client-v15" via strip_tag_prefix.
+        let v = extract_version_from_tag("linux-client-v15", &TagTemplate::WithV);
+        assert!(v.is_empty(), "linux-client-v15 should yield empty for WithV, got {:?}", v);
+        // Sanity: normal v-prefixed tag works fine
+        let v2 = extract_version_from_tag("v0.2.20251017", &TagTemplate::WithV);
+        assert_eq!(v2, "0.2.20251017");
+    }
+
+    #[test]
+    fn test_versions_format_incompatible_int_vs_semver() {
+        // "15" (single integer) vs "0.2.20251017" (3-segment) must be incompatible
+        assert!(versions_format_incompatible("0.2.20251017", "15"),
+            "single-int vs multi-segment should be incompatible");
+        assert!(versions_format_incompatible("15", "0.2.20251017"),
+            "multi-segment vs single-int should be incompatible");
+        // Normal semver comparison is still compatible
+        assert!(!versions_format_incompatible("1.2.3", "1.3.0"));
+        // Single-int vs single-int is compatible
+        assert!(!versions_format_incompatible("14", "15"));
+    }
 
     #[test]
     fn test_parse_uboot_layerscape_makefile() {
