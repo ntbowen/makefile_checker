@@ -95,6 +95,14 @@ fn try_replace_var(
         &after_op[..n]
     };
 
+    // Do not overwrite a value that is itself a Makefile variable reference
+    // (e.g. PKG_SOURCE_VERSION:=v$(PKG_VERSION)).  Such lines are derived
+    // from PKG_VERSION and must stay as-is; only PKG_VERSION itself is updated.
+    let current_value = after_op.trim();
+    if current_value.contains("$(") || current_value.contains("${") {
+        return None;
+    }
+
     changed.push(var_name.to_string());
     Some(format!("{}{}{}{}{}", indent, var_name, op, spaces, new_value))
 }
@@ -131,6 +139,25 @@ mod tests {
         let out = apply_updates(src, &upd, &mut ch);
         assert_eq!(out, "PKG_VERSION:=  3.0.0\n");
         assert!(ch.contains(&"PKG_VERSION".to_string()));
+    }
+
+    #[test]
+    fn test_derived_source_version_not_overwritten() {
+        // lua-libmodbus: PKG_SOURCE_VERSION:=v$(PKG_VERSION) is derived,
+        // must not be replaced with a literal even when write_pkg_source_version is set.
+        let src = "PKG_VERSION:=0.7\nPKG_SOURCE_VERSION:=v$(PKG_VERSION)\n";
+        let upd = MakefileUpdate {
+            pkg_version: Some("0.8".into()),
+            pkg_source_version: Some("v0.8".into()),
+            ..Default::default()
+        };
+        let mut ch = vec![];
+        let out = apply_updates(src, &upd, &mut ch);
+        assert!(out.contains("PKG_VERSION:=0.8"), "PKG_VERSION should update");
+        assert!(out.contains("PKG_SOURCE_VERSION:=v$(PKG_VERSION)"),
+            "derived PKG_SOURCE_VERSION must not be replaced with literal");
+        assert!(!ch.contains(&"PKG_SOURCE_VERSION".to_string()),
+            "PKG_SOURCE_VERSION must not appear in changed list");
     }
 
     #[test]
