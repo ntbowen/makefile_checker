@@ -541,6 +541,19 @@ impl UpstreamChecker {
             // Use write_ver for comparison (dot-normalised) to avoid semver pre-release
             // misclassification of versions like '6.18.2-1.0.0'.
             let is_outdated = compare_versions(parsed.effective_version(), &write_ver);
+            // If PKG_VERSION is derived from PKG_SOURCE_VERSION (e.g. lua-openssl:
+            // PKG_VERSION:=$(subst -,.,$(PKG_SOURCE_VERSION))), write the tag name
+            // into PKG_SOURCE_VERSION and leave PKG_VERSION untouched (it will update
+            // automatically via the expression).
+            let has_src_ver = parsed.pkg_source_version.is_some();
+            let effective_src_ver = write_src_ver.or_else(|| {
+                if has_src_ver { Some(tag.clone()) } else { None }
+            });
+            let effective_pkg_ver = if has_src_ver && effective_src_ver.is_some() {
+                None  // PKG_VERSION is derived — don't overwrite the expression
+            } else {
+                Some(write_ver.clone())
+            };
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
                 current_version: parsed.effective_version().to_string(),
@@ -554,8 +567,8 @@ impl UpstreamChecker {
                 check_error: None,
                 source_backend: "github-release".to_string(),
                 hash_mismatch: None,
-                write_pkg_version: Some(write_ver),
-                write_pkg_source_version: write_src_ver,
+                write_pkg_version: effective_pkg_ver,
+                write_pkg_source_version: effective_src_ver,
                 write_pkg_source_date: None,
                 format_mismatch: false,
                 is_newer: false,
