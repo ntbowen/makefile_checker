@@ -1096,6 +1096,18 @@ impl UpstreamChecker {
         // - reject versions with ≥6 numeric segments (e.g. "3.0.35.4.1.0" is
         //   clearly a Repology aggregation artefact, not a real release version)
         // - reject versions where any segment exceeds 9999 (nonsensical)
+        // Major-version prefix of the current package (e.g. "5.4" for lua5.4
+        // with PKG_VERSION=5.4.7).  We derive it from the first two dot-segments
+        // of the current version so that repology does not suggest 5.5 when the
+        // package intentionally tracks the 5.4.x branch.
+        let current_segs: Vec<&str> = parsed.effective_version().splitn(3, '.').collect();
+        let current_prefix: Option<String> = if current_segs.len() >= 2 {
+            Some(format!("{}.{}", current_segs[0], current_segs[1]))
+        } else if current_segs.len() == 1 {
+            Some(current_segs[0].to_string())
+        } else {
+            None
+        };
         let newest = packages
             .iter()
             .filter(|p| {
@@ -1108,6 +1120,24 @@ impl UpstreamChecker {
                     .filter_map(|s| s.parse().ok())
                     .collect();
                 segs.len() < 6 && segs.iter().all(|&n| n <= 9999)
+            })
+            .filter(|p| {
+                // Reject candidates whose major.minor prefix differs from current.
+                // e.g. current=5.4.7 → prefix "5.4"; reject "5.5", accept "5.4.8".
+                // Only applied when current version has ≥2 segments (skips single-int
+                // versions like "15" where the constraint makes no sense).
+                if let Some(ref prefix) = current_prefix {
+                    if prefix.contains('.') {
+                        let cand_segs: Vec<&str> = p.version.splitn(3, '.').collect();
+                        let cand_prefix = if cand_segs.len() >= 2 {
+                            format!("{}.{}", cand_segs[0], cand_segs[1])
+                        } else {
+                            cand_segs[0].to_string()
+                        };
+                        return cand_prefix == *prefix;
+                    }
+                }
+                true
             })
             .max_by(|a, b| version_cmp(&a.version, &b.version));
 
