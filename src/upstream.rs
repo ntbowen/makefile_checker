@@ -2394,7 +2394,7 @@ fn extract_version_from_prefixed_tag(tag: &str, prefix: &str) -> String {
 fn find_best_tag<'a>(
     tags: &[&'a GithubTag],
     template: &TagTemplate,
-    _current_version: &str,
+    current_version: &str,
 ) -> Option<(&'a GithubTag, String)> {
     let mut candidates: Vec<(&GithubTag, String)> = tags
         .iter()
@@ -2402,11 +2402,17 @@ fn find_best_tag<'a>(
             let version = extract_version_from_tag(&t.name, template);
             // Always return the v-stripped form as the canonical version string
             let v = version.trim_start_matches(|c| c == 'v' || c == 'V').to_string();
-            if v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                Some((*t, v))
-            } else {
-                None
+            if !v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                return None;
             }
+            // Skip candidates whose version format is incompatible with the
+            // current version (e.g. single-int "140214" vs "0.91.201110").
+            // This prevents cross-generation version scheme tags from being
+            // selected even when they sort higher alphabetically.
+            if !current_version.is_empty() && versions_format_incompatible(current_version, &v) {
+                return None;
+            }
+            Some((*t, v))
         })
         .collect();
 
