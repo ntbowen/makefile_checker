@@ -2253,8 +2253,9 @@ fn tag_write_fields(
     template: &TagTemplate,
 ) -> (String, Option<String>) {
     match template {
-        TagTemplate::WithV => (version.to_string(), None),
-        TagTemplate::Plain => (version.to_string(), None),
+        // Normalize underscores to dots: tag v4_10_0 → PKG_VERSION 4.10.0
+        TagTemplate::WithV => (version.replace('_', "."), None),
+        TagTemplate::Plain => (version.replace('_', "."), None),
         TagTemplate::Custom(pattern) => {
             // Check if this is a prefix template (e.g. "lf-${VERSION}", "RELEASE-${VERSION}")
             // by seeing whether the pattern has a non-empty, non-digit prefix before ${VERSION}.
@@ -2302,7 +2303,16 @@ fn extract_version_from_tag(tag: &str, template: &TagTemplate) -> String {
                 String::new()  // not a v<version> tag → rejected by find_best_tag
             }
         }
-        TagTemplate::Plain => strip_tag_prefix(tag),
+        TagTemplate::Plain => {
+            // Plain tags must NOT start with v/V — those belong to WithV.
+            // If the tag starts with v/V, reject it so WithV-style aliases
+            // (e.g. "v4_10_0" alongside "4.10.0") are not picked by Plain.
+            if tag.starts_with('v') || tag.starts_with('V') {
+                String::new()
+            } else {
+                strip_tag_prefix(tag)
+            }
+        }
         TagTemplate::Custom(pattern) => {
             // Handle VERSION_NODOT: dots were stripped from version (subst .,,)
             // e.g. pattern "1.${VERSION_NODOT}", tag "1.20260408" -> "2026.04.08"
