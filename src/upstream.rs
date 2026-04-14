@@ -635,7 +635,27 @@ impl UpstreamChecker {
             .filter(|t| !is_prerelease_tag(&t.name))
             .collect();
 
-        let best = find_best_tag(&stable_tags, tag_template, &parsed.pkg_version);
+        let mut best = find_best_tag(&stable_tags, tag_template, &parsed.pkg_version);
+        let mut effective_template = tag_template.clone();
+
+        // Some repos migrate their tag scheme mid-stream (e.g. moby/moby changed
+        // from "v28.x" to "docker-v29.x").  If the primary template found nothing
+        // newer than current, probe well-known text-prefixed alternatives.
+        if best.as_ref().map(|(_, v)| !compare_versions(parsed.effective_version(), v)).unwrap_or(true) {
+            for prefix in &["docker-v", "release-v", "rel-v", "v-"] {
+                let alt_tmpl = TagTemplate::Custom(format!("{}${{VERSION}}", prefix));
+                if let Some((alt_tag, alt_ver)) = find_best_tag(&stable_tags, &alt_tmpl, &parsed.pkg_version) {
+                    if compare_versions(parsed.effective_version(), &alt_ver) {
+                        let current_best = best.as_ref().map(|(_, v)| v.as_str()).unwrap_or("");
+                        if current_best.is_empty() || compare_versions(current_best, &alt_ver) {
+                            best = Some((alt_tag, alt_ver));
+                            effective_template = alt_tmpl;
+                        }
+                    }
+                }
+            }
+        }
+        let tag_template = &effective_template;
 
         if let Some((tag, version)) = best {
             let commit = tag.commit.sha[..tag.commit.sha.len().min(8)].to_string();
