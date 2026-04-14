@@ -2410,7 +2410,30 @@ fn find_best_tag<'a>(
         })
         .collect();
 
-    candidates.sort_by(|a, b| version_cmp(&b.1, &a.1));
+    // Sort descending by version, with a tie-break that prefers the tag
+    // whose format matches the template:
+    //   Plain  → prefer tag that does NOT start with 'v'/'V' (e.g. "4.10.0" over "v4_10_0")
+    //   WithV  → prefer tag that DOES start with 'v'/'V'
+    //   Custom → no preference (stable sort preserves API order)
+    candidates.sort_by(|a, b| {
+        let vcmp = version_cmp(&b.1, &a.1);
+        if vcmp != std::cmp::Ordering::Equal {
+            return vcmp;
+        }
+        // Tie-break by template format match
+        let prefer_no_v = matches!(template, TagTemplate::Plain);
+        let prefer_v    = matches!(template, TagTemplate::WithV);
+        let a_has_v = a.0.name.starts_with('v') || a.0.name.starts_with('V');
+        let b_has_v = b.0.name.starts_with('v') || b.0.name.starts_with('V');
+        if prefer_no_v {
+            // prefer tag without leading v → !a_has_v < !b_has_v  →  a before b if a has no v
+            b_has_v.cmp(&a_has_v)
+        } else if prefer_v {
+            a_has_v.cmp(&b_has_v)
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    });
     candidates.into_iter().next()
 }
 
