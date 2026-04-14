@@ -541,18 +541,26 @@ impl UpstreamChecker {
             // Use write_ver for comparison (dot-normalised) to avoid semver pre-release
             // misclassification of versions like '6.18.2-1.0.0'.
             let is_outdated = compare_versions(parsed.effective_version(), &write_ver);
-            // If PKG_VERSION is derived from PKG_SOURCE_VERSION (e.g. lua-openssl:
-            // PKG_VERSION:=$(subst -,.,$(PKG_SOURCE_VERSION))), write the tag name
-            // into PKG_SOURCE_VERSION and leave PKG_VERSION untouched (it will update
-            // automatically via the expression).
+            // Determine which Makefile field(s) to update:
+            //
+            // Case A — PKG_SOURCE_VERSION is a LITERAL (e.g. lua-openssl: "0.10.0-0"):
+            //   PKG_VERSION is the derived expression $(subst ...); write tag into
+            //   PKG_SOURCE_VERSION and leave PKG_VERSION untouched.
+            //
+            // Case B — PKG_SOURCE_VERSION is DERIVED (e.g. lua-libmodbus: "v$(PKG_VERSION)"):
+            //   PKG_VERSION is the primary field; write write_ver into PKG_VERSION.
+            //   PKG_SOURCE_VERSION auto-tracks via its expression.
+            //
+            // Case C — no PKG_SOURCE_VERSION: write PKG_VERSION only.
             let has_src_ver = parsed.pkg_source_version.is_some();
-            let effective_src_ver = write_src_ver.or_else(|| {
-                if has_src_ver { Some(tag.clone()) } else { None }
-            });
-            let effective_pkg_ver = if has_src_ver && effective_src_ver.is_some() {
-                None  // PKG_VERSION is derived — don't overwrite the expression
+            let src_ver_is_derived = parsed.pkg_source_version_is_derived;
+            let (effective_pkg_ver, effective_src_ver) = if has_src_ver && !src_ver_is_derived {
+                // Case A: literal PKG_SOURCE_VERSION is the primary field
+                let sv = write_src_ver.or(Some(tag.clone()));
+                (None, sv)
             } else {
-                Some(write_ver.clone())
+                // Case B/C: PKG_VERSION is the primary field
+                (Some(write_ver.clone()), write_src_ver)
             };
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
@@ -641,19 +649,16 @@ impl UpstreamChecker {
             // is what should go into PKG_SOURCE_VERSION even for Plain/WithV templates.
             // In that case do NOT write PKG_VERSION directly because it is a derived
             // expression ($(subst ...)) that the updater would overwrite with a literal.
+            // Same A/B/C logic as check_github_release — see comment there.
             let has_src_ver = parsed.pkg_source_version.is_some();
-            let effective_src_ver = write_src_ver.or_else(|| {
-                if has_src_ver {
-                    Some(tag.name.clone())
-                } else {
-                    None
-                }
-            });
-            let effective_pkg_ver = if has_src_ver && effective_src_ver.is_some() {
-                // PKG_VERSION is derived from PKG_SOURCE_VERSION — don't overwrite it
-                None
+            let src_ver_is_derived = parsed.pkg_source_version_is_derived;
+            let (effective_pkg_ver, effective_src_ver) = if has_src_ver && !src_ver_is_derived {
+                // Case A: literal PKG_SOURCE_VERSION
+                let sv = write_src_ver.or(Some(tag.name.clone()));
+                (None, sv)
             } else {
-                Some(write_ver.clone())
+                // Case B/C: PKG_VERSION is primary
+                (Some(write_ver.clone()), write_src_ver)
             };
             return Ok(UpstreamInfo {
                 pkg_name: parsed.pkg_name.clone(),
@@ -2790,6 +2795,7 @@ mod tests {
             pkg_hash: None,
             pkg_source_date: None,
             pkg_source_version: None,
+            pkg_source_version_is_derived: false,
             source_type: SourceType::Unknown,
             raw_vars: Default::default(),
         }

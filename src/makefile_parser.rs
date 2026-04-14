@@ -18,6 +18,12 @@ pub struct ParsedMakefile {
     pub pkg_hash: Option<String>,
     pub pkg_source_date: Option<String>,
     pub pkg_source_version: Option<String>,
+    /// True when PKG_SOURCE_VERSION raw value contains $( or ${ — i.e. it is
+    /// derived from PKG_VERSION (e.g. v$(PKG_VERSION)).  In that case
+    /// PKG_VERSION is the primary field to update; PKG_SOURCE_VERSION will
+    /// auto-track.  False means PKG_SOURCE_VERSION is a literal and should
+    /// be the target for version writes.
+    pub pkg_source_version_is_derived: bool,
     pub source_type: SourceType,
     pub raw_vars: HashMap<String, String>,
 }
@@ -237,8 +243,13 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
         .map(|v| expand_vars(v, &vars));
     let pkg_source_date = vars.get("PKG_SOURCE_DATE")
         .map(|v| expand_vars(v, &vars));
-    let pkg_source_version = vars.get("PKG_SOURCE_VERSION")
-        .map(|v| expand_vars(v, &vars));
+    let pkg_source_version_raw = vars.get("PKG_SOURCE_VERSION").cloned();
+    let pkg_source_version_is_derived = pkg_source_version_raw
+        .as_deref()
+        .map(|v| v.contains("$(") || v.contains("${"))
+        .unwrap_or(false);
+    let pkg_source_version = pkg_source_version_raw
+        .map(|v| expand_vars(&v, &vars));
 
     // Resolve PKG_SOURCE_URL: first expand the whole value (handles += concat),
     // then split on whitespace to get individual mirror URLs.
@@ -509,6 +520,7 @@ pub fn parse_makefile(path: &Path) -> Result<Option<ParsedMakefile>> {
         pkg_hash,
         pkg_source_date,
         pkg_source_version,
+        pkg_source_version_is_derived,
         source_type,
         raw_vars: vars,
     }))
